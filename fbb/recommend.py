@@ -93,6 +93,13 @@ def describe(ctx, B, m, with_urgency=True) -> dict:
     m["add_team"], m["drop_team"] = ctx.team_of(m["add"]), ctx.team_of(m["drop"])
     m["add_games"] = len(sim.player_games(ctx, m["add"], dates))
     m["drop_games"] = len(sim.player_games(ctx, m["drop"], dates))
+    from . import free_agents
+    av = free_agents.availability(m["add"])
+    m["availability"] = av
+    if av["status"] == "W":
+        m["rationale"].insert(0, f"On waivers until {av['until']}: this is a waiver claim, not an instant add")
+    elif av["known"] and not av["listed"]:
+        m["rationale"].insert(0, "Not on your pasted free-agent list: confirm he's available in Yahoo")
     if with_urgency:
         m.update(urgency(ctx, m, B["mine"], B["opp"], dates, B["b"], B["wtd_me"], B["n_sims"], B["seed"]))
     return m
@@ -110,7 +117,11 @@ def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11) -> dict:
     week_games = {p: sum(av for _, av in sim.player_games(ctx, p, dates)) for p in free}
     by_ros = sorted(free, key=lambda p: -ros_value(ctx, p))[:SCREEN_BY_ROS]
     by_week = sorted(free, key=lambda p: -week_games[p] * max(ctx.values["value"].get(p, 0), 0))[:SCREEN_BY_WEEK]
-    adds = list(dict.fromkeys(by_ros + by_week))
+    # players on your pasted Yahoo free-agent list are always considered (they're confirmed)
+    from . import free_agents
+    listed = [p for p in free_agents.listed_ids() if p in ctx.proj.index and p not in rostered
+              and isinstance(ctx.team_of(p), str) and in_rotation(ctx, p)]
+    adds = list(dict.fromkeys(by_ros + by_week + listed))
     drops = sorted(mine, key=lambda p: ros_value(ctx, p))[:SCREEN_DROPS]
 
     cands = sorted((score_swap(ctx, B, a, d) for a in adds for d in drops), key=lambda m: -m["score"])
@@ -146,6 +157,13 @@ def evaluate_add(ctx, pid, n_sims=3000, seed=11) -> dict:
         out["warnings"].append("He isn't on an NBA roster right now (waived, unsigned or retired).")
     elif not out["in_rotation"]:
         out["warnings"].append("His team has played without him and there's no injury listed: he may be out of the rotation.")
+    from . import free_agents
+    av = free_agents.availability(pid)
+    out["availability"] = av
+    if not owner and av["status"] == "W":
+        out["warnings"].append(f"On waivers until {av['until']}: a waiver claim, not an instant add.")
+    elif not owner and av["known"] and not av["listed"]:
+        out["warnings"].append("Not on your pasted free-agent list: he may be owned. Confirm in Yahoo before acting.")
     if out["injury"]:
         g = model._games_out(pid, ctx.injuries, ctx.events)
         out["warnings"].append(f"Injury: {out['injury']['status']}" + (f", ~{g:.0f} games out" if g else "")
@@ -204,6 +222,11 @@ def urgency(ctx, m, mine, opp, dates, b, wtd_me, n_sims, seed) -> dict:
     if al:
         hot.append(al["title"])
     score, conf = m["score"], m["confidence"]
+    from . import free_agents
+    av = free_agents.availability(a)
+    if av["status"] == "W" and score > 0.1:
+        return {"urgency": "Waiver claim", "wait_cost": wait_cost,
+                "urgency_reason": f"he's on waivers until {av['until']}: put in a claim now, he can't be added before then"}
     if (wait_cost >= URGENT_WAIT_COST and score > 0.1) or (hot and score >= 0.2 and conf >= 0.6):
         label = "Do today"
         why = []

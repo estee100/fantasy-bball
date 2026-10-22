@@ -249,3 +249,32 @@ def test_trade_finder_and_evaluator_agree(ctx):
         assert e["my_dwins"] == pytest.approx(t["my_dwins"], abs=1e-6)
     for p in recommend.best_free_agents(ctx):
         assert isinstance(ctx.team_of(p), str)
+
+
+# ---------------------------------------------------------------- Yahoo free-agent list
+
+def test_free_agent_paste_reads_status_waivers_and_positions(ctx, pid):
+    from datetime import date
+    from fbb import free_agents
+    from pathlib import Path
+    text = (Path(__file__).parent / "fixtures" / "yahoo_fa_paste.txt").read_text(encoding="utf-8")
+    players, unmatched = free_agents.parse(text, today=date(2026, 10, 22))
+    by = {p["nba_id"]: p for p in players}
+    assert by[pid("Bilal Coulibaly")]["status"] == "FA" and by[pid("Bilal Coulibaly")]["positions"] == "SG,SF"
+    assert by[pid("Santi Aldama")]["status"] == "W" and by[pid("Santi Aldama")]["until"] == "2026-10-24"
+    assert by[pid("Precious Achiuwa")]["status"] == "FA"
+    assert unmatched == ["Notarealplayer Fakename"]
+
+
+def test_free_agent_list_cleans_outdated_rosters_and_flags_waivers(ctx, pid):
+    from datetime import date
+    from fbb import free_agents, db
+    other = next(k for k in ctx.rosters if k != ctx.my_key)
+    victim = ctx.rosters[other][0]
+    text = f"{ctx.name(victim)}\n{ctx.name(victim)}Player Note XXX - PG\nFA\nSanti Aldama\nSanti AldamaPlayer Note DAL - PF,C\nW (Dec 31)\n"
+    res = free_agents.import_list(text)
+    assert any(ctx.name(victim) in x for x in res["removed_from_outdated_rosters"])
+    with db.cursor() as c:
+        assert c.execute("SELECT 1 FROM rosters WHERE team_key=? AND nba_id=?", (other, victim)).fetchone() is None
+    assert free_agents.availability(pid("Santi Aldama"))["status"] == "W"
+    assert free_agents.availability(pid("Nikola Jokić"))["listed"] is False

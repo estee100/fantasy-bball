@@ -656,3 +656,33 @@ def trades_find():
 @app.get("/api/trades/find")
 def trades_status():
     return _json(_trade_job)
+
+
+
+# ---------------------------------------------------------------- Yahoo free-agent list
+
+class FaIn(BaseModel):
+    text: str
+    append: bool = False
+
+
+@app.get("/api/free-agents")
+def fa_get():
+    from . import free_agents
+    fa = db.kv_get("fa_list")
+    if not fa:
+        return {"pasted": False}
+    snap = free_agents.snapshot()
+    return {"pasted": True, "created": fa["created"], "fresh": snap is not None, "players": len(fa["players"]),
+            "on_waivers": sum(1 for p in fa["players"].values() if p["status"] == "W")}
+
+
+@app.post("/api/free-agents")
+def fa_import(f: FaIn):
+    from . import free_agents
+    try:
+        res = free_agents.import_list(f.text, append=f.append)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _manual_changed()
+    return _json(res)

@@ -45,6 +45,8 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("#report-btn").addEventListener("click", submitReport);
   $("#team-btn").addEventListener("click", importTeam);
+  $("#fa-btn").addEventListener("click", () => importFa(false));
+  $("#fa-add").addEventListener("click", () => importFa(true));
   initWatchPicker();
   initCheckPicker();
   initHistoryForm();
@@ -270,6 +272,7 @@ function renderMoves() {
     <div class="move">
       <div class="swap">
         ${m.urgency ? `<span class="status ${m.urgency === "Do today" ? "st-serious" : m.urgency === "Worth doing" ? "st-good" : ""}" data-tip="${esc(m.urgency_reason || "")}"><span class="dot" ${m.urgency === "Marginal" ? 'style="background:var(--axis)"' : ""}></span>${esc(m.urgency)}</span>` : ""}
+        ${m.availability?.status === "W" ? `<span class="chip" style="color:var(--serious)" title="On waivers: needs a claim">Waivers → ${esc(shortDate(m.availability.until))}</span>` : ""}
         <span class="chip k-${m.kind}" data-tip="${m.kind === "stream" ? "Stream: helps this week's matchup; judged on the rest of this week" : "Upgrade: helps this week and beyond; judged over the next 21 days"}">${m.kind === "stream" ? "Stream" : "Upgrade"}</span>
         <span class="add"><span class="sign">+</span> <a href="#" data-pid="${m.add}">${esc(m.add_name)}</a> <span class="pteam">${esc(m.add_team || "")} · ${m.add_games} g</span></span>
         <span class="drop"><span class="sign">−</span> <a href="#" data-pid="${m.drop}">${esc(m.drop_name)}</a> <span class="pteam">${esc(m.drop_team || "")} · ${m.drop_games} g</span></span>
@@ -757,6 +760,7 @@ let setupData = null;
 async function loadSetup() {
   setupData = await api("/api/manual");
   renderSetup();
+  renderFaStatus(await api("/api/free-agents"));
   renderAlertSettings(await api("/api/alerts"));
 }
 
@@ -1394,4 +1398,28 @@ function renderTradeFinder(R) {
     renderPicked(); evalTrade();
     $("#trade-result").scrollIntoView({ behavior: "smooth" });
   }));
+}
+
+/* ------------------------------------------------------------------ free-agent list */
+function renderFaStatus(F) {
+  $("#fa-sub").textContent = F.pasted
+    ? `${F.players} players listed, ${F.on_waivers} on waivers · pasted ${ago(F.created)}${F.fresh ? "" : " (stale: re-paste)"}`
+    : "not pasted yet: availability is inferred from rosters";
+}
+
+async function importFa(append) {
+  const st = $("#fa-status"), text = $("#fa-text").value;
+  if (text.length < 50) { st.textContent = "Paste the Yahoo page first."; return; }
+  st.textContent = "Importing…";
+  const r = await fetch("/api/free-agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, append }) });
+  const d = await r.json();
+  if (!r.ok) { st.textContent = d.detail || "Import failed"; return; }
+  const bits = [`${d.added_now} players imported (${d.players} on the list, ${d.on_waivers} on waivers).`];
+  if (d.removed_from_outdated_rosters.length) bits.push(`Removed from outdated pasted rosters: ${d.removed_from_outdated_rosters.join(", ")}.`);
+  if (d.listed_but_on_your_roster.length) bits.push(`On your roster but listed as available (did you drop them?): ${d.listed_but_on_your_roster.join(", ")}.`);
+  if (d.unmatched.length) bits.push(`Couldn't match: ${d.unmatched.join(", ")}.`);
+  st.innerHTML = esc(bits.join(" "));
+  $("#fa-text").value = "";
+  renderFaStatus(await api("/api/free-agents"));
+  afterManualChange();
 }

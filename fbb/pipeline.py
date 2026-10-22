@@ -215,6 +215,15 @@ def readiness() -> list:
                        "detail": f"{len(others)} of {info['num_teams'] - 1} other teams pasted"
                                  + (f"; over a week old: {', '.join(stale)}" if stale else "")
                                  + ("" if info["opponent_key"] else "; no opponent picked")})
+        fa = db.kv_get("fa_list")
+        if not fa:
+            checks.append({"name": "Free-agent list", "ok": False,
+                           "detail": "not pasted: availability is inferred from rosters (Setup > Free agents)"})
+        else:
+            from . import free_agents
+            if free_agents.snapshot() is None:
+                checks.append({"name": "Free-agent list", "ok": False,
+                               "detail": "older than 3 days: re-paste it in Setup so pickups are current"})
     err = db.kv_get("claude_error")
     if err:
         checks.append({"name": "News extraction", "ok": False,
