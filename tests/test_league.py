@@ -142,3 +142,38 @@ def test_season_week_counts_from_first_game_week(league_db):
     assert sim.season_week(date(2026, 10, 22)) == 1
     assert sim.season_week(date(2026, 10, 26)) == 2
     assert sim.week_range_for(2) == ("2026-10-26", "2026-11-01")
+
+
+# ---------------------------------------------------------------- your take
+
+def test_take_changes_projection_everywhere_and_clears(ctx, pid):
+    from fbb import overrides, pipeline, sim
+    mc = pid("Jared McCain")
+    before = ctx.values["value"][mc]
+    model_min = ctx.raw_proj.at[mc, "min"]
+    res = overrides.set_take(ctx, mc, "minutes", 28, "more minutes")
+    assert res["your_per_game"] == pytest.approx(res["model_per_game"] * 28 / model_min, rel=1e-6)
+    ctx = pipeline.context(reload=True)
+    assert ctx.values["value"][mc] > before * 1.2           # rankings/recommendations see it
+    assert ctx.raw_proj.at[mc, "min"] == pytest.approx(model_min)  # the model's own view is kept
+    assert ctx.takes[mc] == pytest.approx(28 / model_min)
+    rep = overrides.report(ctx)
+    assert rep["items"][0]["name"] == "Jared McCain" and rep["items"][0]["active"] == 1
+    overrides.clear(mc)
+    ctx = pipeline.context(reload=True)
+    assert ctx.values["value"][mc] == pytest.approx(before, rel=1e-6)
+
+
+def test_take_validation(ctx, pid):
+    from fbb import overrides
+    with pytest.raises(ValueError):
+        overrides.set_take(ctx, pid("Jared McCain"), "minutes", 60)
+    with pytest.raises(ValueError):
+        overrides.set_take(ctx, pid("Jared McCain"), "vibes", 10)
+
+
+def test_tuning_ignores_takes(ctx, pid):
+    from fbb import model, overrides
+    overrides.set_take(ctx, pid("Jared McCain"), "pct", 50)
+    fresh = model.project(ctx.logs, ctx.params)       # what tuning/backtests use
+    assert fresh.at[pid("Jared McCain"), "min"] == pytest.approx(ctx.raw_proj.at[pid("Jared McCain"), "min"])

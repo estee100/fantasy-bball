@@ -364,7 +364,7 @@ function rosterTable(rows, el, withSlot) {
   el.innerHTML = `<thead><tr><th>Player</th>${withSlot ? "<th>Slot</th>" : ""}<th>Status</th><th class="r" title="Games left this week (expected, after injury and rest risk)">Games</th>
     ${cats.map(([, l]) => `<th class="r">${l}</th>`).join("")}<th class="r" title="${points ? "Projected fantasy points per game" : "Value above replacement level"}">${points ? "FP/G" : "Value"}</th><th class="r" title="Last 5 games vs projection">Form</th></tr></thead>
     <tbody>${rows.map((r) => `<tr class="click" data-pid="${r.nba_id}">
-      <td><span class="pname">${esc(r.name)}</span><span class="pteam">${esc(r.team || "")}${r.positions ? " · " + esc(r.positions) : ""}</span></td>
+      <td><span class="pname">${esc(r.name)}</span>${r.take ? '<span class="take-badge" title="Using your take, not the model\'s projection">YOUR TAKE</span>' : ""}<span class="pteam">${esc(r.team || "")}${r.positions ? " · " + esc(r.positions) : ""}</span></td>
       ${withSlot ? `<td><span class="slot">${esc(r.slot || "")}</span></td>` : ""}
       <td>${injuryStatus(r.injury)}</td>
       <td class="r num">${r.games_left}${r.expected_games < r.games_left - 0.05 ? ` <span class="muted small">(${fmt(r.expected_games, 1)})</span>` : ""}</td>
@@ -487,6 +487,7 @@ async function openPlayer(pid) {
       <span class="muted small">${p.n_games} games in sample · ${p.games_left} left this week</span></div>
     ${p.injury?.comment ? `<div class="note" style="margin-top:10px">${esc(p.injury.comment)}</div>` : ""}
     ${(p.alerts || []).map((a) => `<div class="alert ${a.kind}" style="margin-top:10px;cursor:default"><div class="row1"><span class="status ${(ALERT_KIND[a.kind] || [])[1]}"><span class="dot"></span>${(ALERT_KIND[a.kind] || [a.kind])[0]}</span></div><div class="t">${esc(a.title)}</div></div>`).join("")}
+    ${takeBox(p)}
     <h4>Projection per game</h4>
     <div class="num ink2">${p.proj ? `${fmt(p.proj.min, 1)} min · ${fmt(p.proj.pts, 1)} pts · ${fmt(p.proj.reb, 1)} reb · ${fmt(p.proj.ast, 1)} ast · ${fmt(p.proj.stl, 1)} stl · ${fmt(p.proj.blk, 1)} blk · ${fmt(p.proj.fg3m, 1)} 3pm · ${fmt(p.proj.tov, 1)} to` : "–"}</div>
     ${Object.keys(z).length ? `<h4>Category impact <span class="muted small" style="font-weight:400">z-score vs the draftable pool</span></h4>
@@ -505,6 +506,7 @@ async function openPlayer(pid) {
     <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Opp</th><th class="r">MIN</th><th class="r">PTS</th><th class="r">REB</th><th class="r">AST</th><th class="r">STL</th><th class="r">BLK</th><th class="r">3PM</th><th class="r">TO</th><th class="r">FG</th></tr></thead>
       <tbody>${(p.game_log || []).map((g) => `<tr><td class="num">${esc(g.date)}</td><td class="muted">${esc(g.matchup.slice(-6))}</td>${["min", "pts", "reb", "ast", "stl", "blk", "fg3m", "tov"].map((k) => `<td class="r num">${Math.round(g[k])}</td>`).join("")}<td class="r num">${esc(g.fg)}</td></tr>`).join("")}</tbody></table></div>`;
   $(".drawer .close", root).addEventListener("click", close);
+  bindTakeBox(p, pid);
   $("#drawer-watch").addEventListener("click", async (e) => {
     const r = await watchPlayer(pid);
     e.target.textContent = r.error ? r.error : "★ Watching";
@@ -1170,6 +1172,7 @@ function initHistoryForm() {
 }
 
 async function loadHistory() {
+  loadTakes();
   const H = await api("/api/history");
   const unit = H.unit === "fantasy pts" ? "pts" : "value";
   const sc = H.scorecard;
@@ -1218,4 +1221,77 @@ function txCard(t, unit, SRC) {
     </div>
     <div class="res">${res}<div><button class="btn ghost small" data-txdel="${t.id}" style="margin-top:6px">Remove</button></div></div>
   </div>`;
+}
+
+/* ------------------------------------------------------------------ your take */
+function takeBox(p) {
+  const T = p.take || {};
+  if (T.model_per_game == null) return "";
+  const unit = S.league.scoring_mode === "points" ? "pts/game" : "value";
+  const a = T.active;
+  const mode = a ? a.kind : "minutes";
+  const val = a ? a.value : Math.round((T.model_min || 0) * 10) / 10;
+  return `<div class="take-box" id="take-box" data-mode="${mode}">
+    <div class="row"><b>Your take</b>
+      <span class="muted small">model: ${fmt(T.model_min, 1)} min, ${fmt(T.model_per_game, 1)} ${unit}${a ? ` · <b style="color:var(--opp)">using yours: ${fmt(T.your_per_game, 1)} ${unit}</b>` : ""}</span></div>
+    <div class="row">
+      <span class="seg"><button data-k="minutes" aria-pressed="${mode === "minutes"}">Minutes per game</button><button data-k="pct" aria-pressed="${mode === "pct"}">Production ±%</button></span>
+      <input type="number" id="take-val" step="0.5" value="${val}"> <span class="small muted" id="take-unit">${mode === "minutes" ? "min" : "%"}</span>
+      <span class="small" id="take-preview"></span>
+    </div>
+    <div class="row"><input type="text" id="take-note" placeholder="Why? (e.g. more minutes after last game)" value="${esc(a?.note || "")}">
+      <button class="btn primary small" id="take-save">${a ? "Update" : "Use my take"}</button>
+      ${a ? '<button class="btn ghost small" id="take-clear">Back to the model</button>' : ""}</div>
+    <div class="small muted">Used everywhere (lineups, moves, simulations). The model keeps its own number too, and History shows whose was closer.</div>
+  </div>`;
+}
+
+function bindTakeBox(p, pid) {
+  const box = $("#take-box");
+  if (!box) return;
+  const T = p.take;
+  const unit = S.league.scoring_mode === "points" ? "pts/game" : "value";
+  const preview = () => {
+    const v = parseFloat($("#take-val").value);
+    if (isNaN(v)) { $("#take-preview").textContent = ""; return; }
+    const f = box.dataset.mode === "minutes" ? v / Math.max(T.model_min, 1) : 1 + v / 100;
+    const yours = T.model_per_game * Math.min(Math.max(f, 0.3), 2.5);
+    $("#take-preview").innerHTML = `→ <b>${fmt(yours, 1)} ${unit}</b> <span class="${yours >= T.model_per_game ? "delta-up" : "delta-down"}">(${signed(yours - T.model_per_game, 1)})</span>`;
+  };
+  $$(".seg button", box).forEach((b) => b.addEventListener("click", () => {
+    box.dataset.mode = b.dataset.k;
+    $$(".seg button", box).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    $("#take-val").value = b.dataset.k === "minutes" ? Math.round(T.model_min * 10) / 10 : 0;
+    $("#take-unit").textContent = b.dataset.k === "minutes" ? "min" : "%";
+    preview();
+  }));
+  $("#take-val").addEventListener("input", preview);
+  preview();
+  $("#take-save").addEventListener("click", async () => {
+    const r = await fetch("/api/take", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nba_id: pid, kind: box.dataset.mode, value: parseFloat($("#take-val").value), note: $("#take-note").value }) });
+    const d = await r.json();
+    if (!r.ok) { $("#take-preview").textContent = d.detail || "Couldn't save"; return; }
+    $("#take-save").textContent = "Saved: updating projections…"; $("#take-save").disabled = true;
+    afterManualChange().then(() => openPlayer(pid));
+  });
+  const clr = $("#take-clear");
+  if (clr) clr.addEventListener("click", async () => {
+    await fetch(`/api/take/${pid}`, { method: "DELETE" });
+    clr.textContent = "Cleared: updating…"; clr.disabled = true;
+    afterManualChange().then(() => openPlayer(pid));
+  });
+}
+
+async function loadTakes() {
+  const R = await api("/api/takes");
+  const unit = R.unit === "fantasy pts" ? "pts" : "value";
+  const el = $("#takes-list");
+  if (!R.items.length) { el.innerHTML = `<div class="empty">No takes yet. Open any player and use "Your take" when you disagree with the model.</div>`; return; }
+  el.innerHTML = `<div class="small ink2" style="margin-bottom:8px">${R.judged ? `<b>Closer than the model in ${R.yours_closer} of ${R.judged}</b> takes with 3+ games played.` : "Takes are judged once the player has played 3+ games since you set them."}</div>` +
+    R.items.map((t) => `<div class="setting-row" style="grid-template-columns:1fr auto;border-bottom:1px solid var(--grid);padding:8px 0">
+      <span><a href="#" data-pid="${t.nba_id}" class="pname">${esc(t.name)}</a> <span class="muted small">${t.kind === "minutes" ? `${fmt(t.value, 1)} min` : signed(t.value, 0) + "%"} · since ${esc(shortDate(t.since))}${t.active ? "" : " · cleared"}${t.note ? ` · "${esc(t.note)}"` : ""}</span><br>
+        <span class="small">you ${fmt(t.your_per_game, 1)} · model ${fmt(t.model_per_game, 1)}${t.actual_per_game != null ? ` · actual <b>${fmt(t.actual_per_game, 1)}</b> ${unit}/g over ${t.games} g (${fmt(t.actual_min, 1)} min)` : " · no games yet"}</span></span>
+      <span class="small">${t.closer ? `<span class="status ${t.closer === "you" ? "st-good" : "st-warning"}"><span class="dot"></span>${t.closer === "you" ? "You're closer" : "Model's closer"}</span>${t.games < 3 ? '<br><span class="muted">early</span>' : ""}` : ""}</span></div>`).join("");
+  bindPlayerLinks(el);
 }

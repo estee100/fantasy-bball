@@ -43,6 +43,8 @@ class Context:
     weeks_remaining: int
     wtd: dict = field(default_factory=dict)     # team_key -> {stat: value} week-to-date
     today: str | None = None                    # backtests replay the past: "today" is the week start
+    raw_proj: object = None                     # the model's own projections, before your takes
+    takes: dict = field(default_factory=dict)   # pid -> scale factor from your take
     _pools: dict = field(default_factory=dict)
     _team_dates: dict = field(default_factory=dict)
 
@@ -65,6 +67,9 @@ def load_context() -> Context:
     apply_rates(params)
     logs = nba.load_logs()
     proj = model.project(logs, params)
+    raw_proj = proj.copy()
+    from . import overrides
+    takes = overrides.apply(proj)  # your takes reshape everything downstream; learning never sees them
     num_teams = db.kv_get("num_teams", 10)
     roster_size = db.kv_get("roster_size", 13)
     values = model.value_players(proj, num_teams, roster_size)
@@ -85,7 +90,7 @@ def load_context() -> Context:
                   week_start=ws, week_end=we, active_slots=db.kv_get("active_slots", config.DEFAULT_ACTIVE_SLOTS),
                   roster_size=roster_size, num_teams=num_teams,
                   weeks_remaining=db.kv_get("weeks_remaining", default_weeks_remaining()),
-                  wtd=db.kv_get("week_to_date") or {})
+                  wtd=db.kv_get("week_to_date") or {}, raw_proj=raw_proj, takes=takes)
     return ctx
 
 

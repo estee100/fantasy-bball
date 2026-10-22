@@ -177,9 +177,15 @@
           <div class="small muted">Scored from the date you pick, so entering a move a few days late is fine. In manual mode this also updates the rosters.</div>
         </div>
       </div>
-      <div class="card" style="align-self:start">
-        <div class="hd"><h2>Scorecard</h2><span class="sub">finished moves, judged on what happened after</span></div>
-        <div class="bd" id="tx-score"></div>
+      <div style="display:grid;gap:16px;align-self:start">
+        <div class="card">
+          <div class="hd"><h2>Scorecard</h2><span class="sub">finished moves, judged on what happened after</span></div>
+          <div class="bd" id="tx-score"></div>
+        </div>
+        <div class="card">
+          <div class="hd"><h2>Your takes</h2><span class="sub">your projection vs the model's, on the games since</span></div>
+          <div class="bd" id="takes-list"></div>
+        </div>
       </div>
     </div>
     <div class="card section-gap">

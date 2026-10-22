@@ -88,6 +88,7 @@ def _player_row(ctx, pid, dates, slot=None):
            "value": float(v["value"]) if v is not None else None,
            "var": float(v["var"]) if v is not None else None,
            "fp": float(v["value"]) if v is not None and model.scoring_mode() == "points" else None,
+           "take": bool(ctx.takes.get(pid)),
            "trend": trend, "n_games": int(p["n_games"]) if p is not None else 0}
     if p is not None:
         row["proj"] = {s: round(float(p[s]), 2) for s in ("min", "pts", "reb", "ast", "stl", "blk", "fg3m", "tov")}
@@ -175,6 +176,12 @@ def player(pid: int):
         raise HTTPException(404, "unknown player")
     row = _player_row(ctx, pid, sim.remaining_dates(ctx))
     with db.cursor() as c:
+        from . import overrides
+        take = overrides.active().get(pid)
+        raw = ctx.raw_proj.loc[pid] if ctx.raw_proj is not None and pid in ctx.raw_proj.index else None
+        row["take"] = {"active": take, "model_min": float(raw["min"]) if raw is not None else None,
+                       "model_per_game": overrides.per_game(raw) if raw is not None else None,
+                       "your_per_game": float(ctx.values["value"].get(pid, 0)) if take else None}
         row["alerts"] = [dict(r) | {"detail": json.loads(r["detail"])} for r in
                          c.execute("SELECT * FROM alerts WHERE nba_id=? AND active=1", (pid,))]
         row["scouting"] = [dict(r) | {"strengths": json.loads(r["strengths"]), "weaknesses": json.loads(r["weaknesses"])}
@@ -545,4 +552,39 @@ def history_edit(tid: int, e: TxEdit):
 def history_delete(tid: int):
     from . import history
     history.delete(tid)
+    return {"ok": True}
+
+
+
+# ---------------------------------------------------------------- your take
+
+class TakeIn(BaseModel):
+    nba_id: int
+    kind: str
+    value: float
+    note: str = ""
+
+
+@app.get("/api/takes")
+def takes_get():
+    from . import overrides
+    return _json(overrides.report(pipeline.context()))
+
+
+@app.post("/api/take")
+def take_set(t: TakeIn):
+    from . import overrides
+    try:
+        res = overrides.set_take(pipeline.context(), t.nba_id, t.kind, t.value, t.note)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _manual_changed()
+    return _json(res)
+
+
+@app.delete("/api/take/{nba_id}")
+def take_clear(nba_id: int):
+    from . import overrides
+    overrides.clear(nba_id)
+    _manual_changed()
     return {"ok": True}

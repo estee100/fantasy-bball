@@ -291,3 +291,13 @@ section[data-panel="setup"] { max-width: 1320px; margin: 0 auto; padding: 20px; 
 .tx .res b { font-size: 16px; display: block; }
 .tx.week { grid-template-columns: 92px 1fr auto; }
 @media (max-width: 640px) { .tx { grid-template-columns: 1fr; } .tx .res { text-align: left; } }
+
+/* ------------------------------------------------------------------ your take */
+.take-box { border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: grid; gap: 8px; background: var(--surface-2); }
+.take-box .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.take-box input[type=number] { width: 80px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; }
+.take-box input[type=text] { flex: 1; min-width: 160px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; background: var(--surface); padding: 5px 10px; cursor: pointer; font-size: 12px; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.take-badge { font-size: 10px; font-weight: 700; color: var(--opp); border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; margin-left: 4px; vertical-align: 1px; }
