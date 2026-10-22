@@ -99,7 +99,7 @@ def describe(ctx, B, m, with_urgency=True) -> dict:
     if av["status"] == "W":
         m["rationale"].insert(0, f"On waivers until {av['until']}: this is a waiver claim, not an instant add")
     elif av["known"] and not av["listed"]:
-        m["rationale"].insert(0, "Not on your pasted free-agent list: confirm he's available in Yahoo")
+        m["rationale"].append("Beyond the Yahoo pages you pasted, so his waiver status is unknown: check if he's FA or W")
     if with_urgency:
         m.update(urgency(ctx, m, B["mine"], B["opp"], dates, B["b"], B["wtd_me"], B["n_sims"], B["seed"]))
     return m
@@ -173,7 +173,7 @@ def evaluate_add(ctx, pid, n_sims=3000, seed=11) -> dict:
     if not owner and av["status"] == "W":
         out["warnings"].append(f"On waivers until {av['until']}: a waiver claim, not an instant add.")
     elif not owner and av["known"] and not av["listed"]:
-        out["warnings"].append("Not on your pasted free-agent list: he may be owned. Confirm in Yahoo before acting.")
+        out["warnings"].append("Beyond the Yahoo pages you pasted: waiver status unknown (FA or W). Check in Yahoo.")
     if out["injury"]:
         g = model._games_out(pid, ctx.injuries, ctx.events)
         out["warnings"].append(f"Injury: {out['injury']['status']}" + (f", ~{g:.0f} games out" if g else "")
@@ -234,10 +234,6 @@ def urgency(ctx, m, mine, opp, dates, b, wtd_me, n_sims, seed) -> dict:
     score, conf = m["score"], m["confidence"]
     from . import free_agents
     av = free_agents.availability(a)
-    if av["known"] and not av["listed"] and len(free_agents.listed_ids()) >= 75:
-        # a fresh 75+ player Yahoo list that doesn't include him: he's most likely owned
-        return {"urgency": "Confirm first", "wait_cost": wait_cost,
-                "urgency_reason": "not in Yahoo's available list you pasted: he was probably picked up. Check before acting"}
     if av["status"] == "W" and score > 0.1:
         return {"urgency": "Waiver claim", "wait_cost": wait_cost,
                 "urgency_reason": f"he's on waivers until {av['until']}: put in a claim now, he can't be added before then"}
