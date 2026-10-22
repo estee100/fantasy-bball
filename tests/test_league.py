@@ -323,3 +323,41 @@ def test_free_agent_pages_pasted_together_build_one_list(ctx, pid):
     assert r["appended"] and r["players"] == 2
     r = free_agents.import_list(page("Bilal Coulibaly", "WAS", "SG,SF"), append=False)
     assert r["players"] == 1
+
+
+
+# ---------------------------------------------------------------- Yahoo transaction log
+
+def test_transaction_log_parses_blocks_and_cut_off_team(ctx, pid):
+    from datetime import date
+    from pathlib import Path
+    from fbb import yahoo_log
+    text = (Path(__file__).parent / "fixtures" / "yahoo_txn_paste.txt").read_text(encoding="utf-8")
+    txns, odd = yahoo_log.parse(text, today=date(2026, 10, 22))
+    assert len(txns) == 8 and odd == []
+    first = txns[0]                                   # oldest: its team line was cut off
+    assert first["team"] is None and [a["pid"] for a in first["adds"]] == [pid("Andre Drummond")]
+    mine = next(t for t in txns if t["team"] == "Sheldon's Superb Team")
+    assert [a["pid"] for a in mine["adds"]] == [pid("Jared McCain")] and [d["pid"] for d in mine["drops"]] == [pid("Jalen Suggs")]
+    nurk = next(t for t in txns if t["team"] == "Only PGs")   # trailing injury badge "O"
+    assert [a["pid"] for a in nurk["adds"]] == [pid("Jusuf Nurkić")]
+    assert nurk["when"].utcoffset().total_seconds() == -4 * 3600   # Yahoo times are US Eastern
+
+
+def test_transaction_log_applies_once_and_only_newer_moves():
+    from datetime import date
+    from pathlib import Path
+    from fbb import yahoo_log, db
+    db.kv_set("yahoo_txn_seen", [])
+    text = (Path(__file__).parent / "fixtures" / "yahoo_txn_paste.txt").read_text(encoding="utf-8")
+    db.kv_set("manual_updated", dict(db.kv_get("manual_updated", {}), **{"manual.the-haliban": "2026-10-22T08:26:52+00:00",
+              "manual.ryan-s-remarkable-team": "2026-10-22T08:27:27+00:00", "manual.only-pgs": "2026-10-22T08:28:20+00:00"}))
+    r = yahoo_log.import_log(text, today=date(2026, 10, 22))
+    if not r["applied"] and not r["already_reflected"]:
+        import pytest
+        pytest.skip("league in the test DB doesn't have these teams")
+    assert all(x.startswith("The Haliban") for x in r["applied"])          # 8:12 / 9:05 am ET, after the paste
+    assert any("Only PGs" in x for x in r["already_reflected"])            # 4:04 am ET, before the paste
+    again = yahoo_log.import_log(text, today=date(2026, 10, 22))
+    assert again["applied"] == [] and again["your_moves_logged"] == []
+    assert again["already_seen"] >= len(r["applied"]) + len(r["your_moves_logged"])

@@ -165,6 +165,17 @@
 
   <!-- ======================================================= HISTORY -->
   <section data-panel="history" class="hidden">
+    <div class="card" style="margin-bottom:16px">
+      <div class="hd"><h2>Paste Yahoo's transaction log</h2><span class="sub">keeps every team's roster current, and logs your own moves here</span></div>
+      <div class="bd">
+        <div class="small ink2" style="margin-bottom:8px">In Yahoo: your league → <b>League</b> → <b>Transactions</b>. Ctrl+A, Ctrl+C, paste below. Safe to paste the same log again: each move is applied once, and only if it's newer than that team's roster paste.</div>
+        <textarea id="txn-text" placeholder="Paste Yahoo's transactions page here…" style="min-height:90px"></textarea>
+        <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn primary" id="txn-btn">Import transactions</button>
+          <span class="small muted" id="txn-status"></span>
+        </div>
+      </div>
+    </div>
     <div class="grid cols-2">
       <div class="card">
         <div class="hd"><h2>Record a move</h2><span class="sub">anything you did in Yahoo that the app didn't see, including from your phone</span></div>

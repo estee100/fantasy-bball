@@ -718,3 +718,21 @@ def add_limit(l: LimitIn):
 def add_limit_get():
     from . import history
     return _json(history.add_budget(pipeline.context()))
+
+
+
+# ---------------------------------------------------------------- Yahoo transaction log
+
+class TxnIn(BaseModel):
+    text: str
+
+
+@app.post("/api/yahoo-log")
+def yahoo_log_import(t: TxnIn):
+    from . import yahoo_log
+    try:
+        res = yahoo_log.import_log(t.text)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _manual_changed()
+    return _json(res)

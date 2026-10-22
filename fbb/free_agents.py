@@ -8,8 +8,9 @@ marked confirmed available, with waiver status:
   W (Oct 24)    on waivers until Oct 24: a claim, not an instant add
 
 Yahoo shows 25 players a page, so a paste covers the best few dozen available players. A
-player the app thinks is free but who isn't on the pasted pages gets a "confirm he's
-available" flag rather than being dropped: he may simply be further down the list.
+player the app thinks is free but who isn't on the pasted pages is still treated as free:
+Yahoo's ranking differs a lot from the model's (Oct 2026: 25 of the model's top 30 free agents
+were beyond Yahoo's first 100, all genuinely free), so only his waiver status is unknown.
 """
 import re
 from datetime import date, datetime

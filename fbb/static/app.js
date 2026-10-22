@@ -46,6 +46,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#report-btn").addEventListener("click", submitReport);
   $("#team-btn").addEventListener("click", importTeam);
   $("#fa-btn").addEventListener("click", () => importFa(null));
+  $("#txn-btn").addEventListener("click", importTxns);
   $("#fa-add").addEventListener("click", () => importFa(false));
   initWatchPicker();
   initCheckPicker();
@@ -1430,4 +1431,26 @@ async function importFa(append) {
   $("#fa-text").value = "";
   renderFaStatus(await api("/api/free-agents"));
   afterManualChange();
+}
+
+/* ------------------------------------------------------------------ Yahoo transaction log */
+async function importTxns() {
+  const st = $("#txn-status"), text = $("#txn-text").value;
+  if (text.length < 30) { st.textContent = "Paste the Yahoo transactions page first."; return; }
+  st.textContent = "Importing…";
+  const r = await fetch("/api/yahoo-log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+  const d = await r.json();
+  if (!r.ok) { st.textContent = d.detail || "Import failed"; return; }
+  const part = (label, xs) => xs && xs.length ? `<div><b>${label}</b> ${esc(xs.join("; "))}</div>` : "";
+  st.innerHTML = `<div style="line-height:1.6">`
+    + part("Rosters updated:", d.applied)
+    + part("Your moves added to History:", d.your_moves_logged)
+    + part("Already up to date:", d.already_reflected)
+    + (d.already_seen ? `<div>${d.already_seen} imported before, skipped.</div>` : "")
+    + part("Skipped:", d.skipped)
+    + part("Not understood (send these to Claude):", d.unrecognized)
+    + (!d.applied.length && !d.your_moves_logged.length ? "<div>Nothing new: everything was already up to date.</div>" : "")
+    + `</div>`;
+  $("#txn-text").value = "";
+  loadHistory(); afterManualChange();
 }
