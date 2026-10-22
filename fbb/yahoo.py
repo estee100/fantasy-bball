@@ -244,6 +244,21 @@ def parse_team_stats(raw) -> dict:
     return out
 
 
+TOKEN_KEYS = ("YAHOO_ACCESS_TOKEN", "YAHOO_GUID", "YAHOO_REFRESH_TOKEN", "YAHOO_TOKEN_TIME",
+              "YAHOO_TOKEN_TYPE", "YAHOO_ACCESS_TOKEN_JSON")
+
+
+def clear_token():
+    """Forget any saved Yahoo login, so the next query runs a fresh browser login.
+    A token's permissions are fixed when it's issued; re-running auth must not reuse it."""
+    import os
+    lines = config.ENV_PATH.read_text(encoding="utf-8").splitlines(keepends=True) if config.ENV_PATH.exists() else []
+    keep = [ln for ln in lines if ln.split("=", 1)[0].strip() not in TOKEN_KEYS]
+    config.ENV_PATH.write_text("".join(keep), encoding="utf-8")
+    for k in TOKEN_KEYS:
+        os.environ.pop(k, None)
+
+
 def diagnose(q) -> list:
     """Probe what the current token can do. Used when the first sync fails, to tell an invalid
     token apart from a token without fantasy scope or a league-access problem."""

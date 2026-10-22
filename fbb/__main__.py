@@ -34,6 +34,8 @@ def main():
             print("No Yahoo credentials yet: built a demo league so the dashboard works.")
     elif a.cmd in ("auth", "sync"):
         from . import yahoo
+        if a.cmd == "auth":
+            yahoo.clear_token()  # always a fresh login, never a stale token
         try:
             print(json.dumps(yahoo.sync(), indent=2, default=str))
         except Exception as e:
