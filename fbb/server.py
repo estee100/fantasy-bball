@@ -686,3 +686,21 @@ def fa_import(f: FaIn):
         raise HTTPException(400, str(e))
     _manual_changed()
     return _json(res)
+
+
+
+class LimitIn(BaseModel):
+    max_adds_week: int | None = None
+
+
+@app.post("/api/add-limit")
+def add_limit(l: LimitIn):
+    db.kv_set("max_adds_week", l.max_adds_week if l.max_adds_week and l.max_adds_week > 0 else None)
+    _manual_changed()
+    return {"ok": True, "max_adds_week": db.kv_get("max_adds_week")}
+
+
+@app.get("/api/add-limit")
+def add_limit_get():
+    from . import history
+    return _json(history.add_budget(pipeline.context()))

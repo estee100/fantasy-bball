@@ -88,10 +88,11 @@ def ingest_schedule() -> int:
     df = scheduleleaguev2.ScheduleLeagueV2(season=config.SEASON, timeout=60).get_data_frames()[0]
     # 002 = regular season (includes NBA Cup group games); 006 = Cup final. Skip preseason/playoffs.
     df = df[df["gameId"].astype(str).str[:3].isin(["002", "006"])]
-    rows = [(str(r.gameId), str(r.gameDateEst)[:10], r.homeTeam_teamTricode, r.awayTeam_teamTricode)
+    rows = [(str(r.gameId), str(r.gameDateEst)[:10], r.homeTeam_teamTricode, r.awayTeam_teamTricode,
+             str(r.gameDateTimeUTC) if str(r.gameDateTimeUTC)[:4] != "1900" else None)
             for r in df.itertuples()]
     with db.cursor() as c:
-        c.executemany("INSERT OR REPLACE INTO schedule VALUES (?,?,?,?)", rows)
+        c.executemany("INSERT OR REPLACE INTO schedule(game_id, game_date, home, away, tip_utc) VALUES (?,?,?,?,?)", rows)
     return len(rows)
 
 

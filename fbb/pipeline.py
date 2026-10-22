@@ -101,6 +101,7 @@ def refresh(daily=False) -> dict:
                 _step(status, "opp_adjust_check", matchups.recheck_and_store)
                 _step(status, "matchup_backtest", lambda: backtest.store(backtest.calibrate()) or "ok")
             _step(status, "scouting_folder", lambda: len(news.ingest_report_folder()))
+            _step(status, "backup", db.backup)
             db.kv_set("daily_done", date.today().isoformat())
             context(reload=True)
         db.kv_set("pipeline_status", status)

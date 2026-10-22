@@ -114,6 +114,9 @@ def cursor():
 
 
 def _migrate(conn):
+    scols = {r[1] for r in conn.execute("PRAGMA table_info(schedule)")}
+    if "tip_utc" not in scols:
+        conn.execute("ALTER TABLE schedule ADD COLUMN tip_utc TEXT")
     pcols = {r[1] for r in conn.execute("PRAGMA table_info(players)")}
     if "espn_pos" not in pcols:
         conn.execute("ALTER TABLE players ADD COLUMN espn_pos TEXT")
@@ -147,3 +150,21 @@ def get_params() -> dict:
     params = dict(config.DEFAULT_PARAMS)
     params.update(kv_get("model_params", {}))
     return params
+
+
+
+def backup(keep=14) -> str:
+    """Dated copy of the database (SQLite's online backup: safe while the app is running).
+    Keeps the newest `keep` copies."""
+    from datetime import date
+    folder = config.DATA_DIR / "backups"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"fbb-{date.today().isoformat()}.db"
+    dst = sqlite3.connect(target)
+    with _lock:
+        src = _conn or connect()
+        src.backup(dst)
+    dst.close()
+    for old in sorted(folder.glob("fbb-*.db"))[:-keep]:
+        old.unlink()
+    return str(target)

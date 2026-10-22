@@ -111,10 +111,34 @@ def _opponents(dates) -> dict:
     return out
 
 
-def day_plan(ctx, team_key, d, opp_map=None) -> dict:
+def tip_times(ctx) -> dict:
+    """{(team, date): tip-off datetime (aware, UTC)} for the whole schedule (cached)."""
+    from datetime import datetime
+    if "_tips" not in ctx._pools:
+        out = {}
+        with db.cursor() as c:
+            for r in c.execute("SELECT game_date, home, away, tip_utc FROM schedule WHERE tip_utc IS NOT NULL"):
+                t = datetime.fromisoformat(r["tip_utc"].replace("Z", "+00:00"))
+                out[(r["home"], r["game_date"])] = t
+                out[(r["away"], r["game_date"])] = t
+        ctx._pools["_tips"] = out
+    return ctx._pools["_tips"]
+
+
+def local_time(t) -> str:
+    return t.astimezone().strftime("%I:%M %p").lstrip("0")
+
+
+def day_plan(ctx, team_key, d, opp_map=None, now=None) -> dict:
+    """Best legal lineup for day d. Players whose game has already tipped off are locked (Yahoo
+    locks each player at his game's start): a locked starter keeps his slot, a locked bench
+    player can't come in, and only the rest is optimized."""
+    from datetime import datetime, timezone
     roster = ctx.rosters.get(team_key, [])
     cur_slots = sim.team_slots(ctx).get(team_key, {})
     slots = slot_list()
+    now = now or datetime.now(timezone.utc)
+    tips = tip_times(ctx)
     opp_map = opp_map or _opponents([d])
     pw = model.scoring_mode() == "points"
     cands, info = [], {}
@@ -128,10 +152,32 @@ def day_plan(ctx, team_key, d, opp_map=None) -> dict:
                    "pos_source": src, "game": opp_map.get((ctx.team_of(p), d)), "avail": a,
                    "ev": a * per_game * sim.game_factor(ctx, p, d), "current_slot": cur_slots.get(p),
                    "game_factor": sim.game_factor(ctx, p, d)}
+        tip = tips.get((ctx.team_of(p), d))
+        info[p]["tip"] = local_time(tip) if tip else None
+        info[p]["locked"] = bool(tip and ctx.today is None and tip <= now)
         if cur_slots.get(p) in NOT_STARTABLE or d not in dict(sim.player_games(ctx, p, [d])):
             continue
+        if info[p]["locked"]:
+            continue  # handled below: his slot is fixed for today
         cands.append((p, pos, info[p]["ev"]))
-    assign, total = solve(sorted(cands, key=lambda c: -c[2]), slots)
+    # locked starters keep their slots (removed from what the solver can fill)
+    free_slots = list(range(len(slots)))
+    fixed = {}
+    for p in roster:
+        x = info[p]
+        if x["locked"] and cur_slots.get(p) not in NOT_STARTING:
+            want = cur_slots.get(p)
+            i = next((i for i in free_slots if slots[i] == want), None)
+            if i is None:
+                i = next((i for i in free_slots if slots[i] == "Util"), None)
+            if i is not None:
+                fixed[i] = p
+                free_slots.remove(i)
+    sub_slots = [slots[i] for i in free_slots]
+    assign_sub, total = solve(sorted(cands, key=lambda c: -c[2]), sub_slots)
+    assign = {free_slots[i]: p for i, p in assign_sub.items()}
+    assign.update(fixed)
+    total += sum(info[p]["ev"] for p in fixed.values() if info[p]["game"])
     lineup = [dict(info[assign[i]], slot=s) if i in assign else {"slot": s, "empty": True} for i, s in enumerate(slots)]
     started = set(assign.values())
     bench = []
@@ -141,6 +187,8 @@ def day_plan(ctx, team_key, d, opp_map=None) -> dict:
         x = info[p]
         if x["current_slot"] in NOT_STARTABLE:
             why = f"on {x['current_slot']}"
+        elif x["locked"]:
+            why = "locked: his game has started"
         elif not x["game"]:
             why = "no game"
         elif x["avail"] < 0.2:
@@ -154,7 +202,8 @@ def day_plan(ctx, team_key, d, opp_map=None) -> dict:
     # Who has to move out in Yahoo: starters with a game who lost their spot, plus only as many
     # idle (no-game) starters as the incoming players need slots, preferring ones whose slot
     # an incoming player is eligible for. Idle starters nobody needs to replace can stay put.
-    out_of_lineup = [p for p in roster if cur_slots.get(p) not in NOT_STARTING and p not in started]
+    out_of_lineup = [p for p in roster if cur_slots.get(p) not in NOT_STARTING and p not in started
+                     and not info[p]["locked"]]
     lost = [p for p in out_of_lineup if info[p]["game"]]
     idle = [p for p in out_of_lineup if not info[p]["game"]]
     incoming = [p for p in started if cur_slots.get(p) in NOT_STARTING]
@@ -163,8 +212,13 @@ def day_plan(ctx, team_key, d, opp_map=None) -> dict:
     fits = lambda p: any(set(info[q]["positions"]) & SLOT_ELIG.get(cur_slots.get(p), set()) for q in incoming)
     idle.sort(key=lambda p: not fits(p))
     to_bench = [f"{info[p]['name']} (lower projection)" for p in lost] +                [f"{info[p]['name']} (no game)" for p in idle[:needed]]
+    upcoming = sorted(t for (team, day), t in tips.items() if day == d and team in {ctx.team_of(p) for p in roster}
+                      and t > now)
     return {"date": d, "lineup": lineup, "bench": bench, "ev_optimal": total, "ev_current": cur,
             "gain": total - cur, "start": to_start, "sit": to_bench,
+            "locked": [info[p]["name"] for p in roster if info[p]["locked"]],
+            "first_tip": local_time(upcoming[0]) if upcoming else None,
+            "first_tip_utc": upcoming[0].isoformat() if upcoming else None,
             "unknown_positions": [info[p]["name"] for p in roster if info[p]["pos_source"] == "unknown"]}
 
 

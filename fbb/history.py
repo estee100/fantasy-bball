@@ -257,3 +257,20 @@ def calibration_pairs() -> list:
             if e.get("final") and e.get("success") is not None and "raw_confidence" in p:
                 out.append((p["raw_confidence"], 1 if e["success"] else 0))
     return out
+
+
+
+def adds_this_week(ctx) -> int:
+    """Players brought in this fantasy week (adds, add/drops, trades, roster changes with ins)."""
+    _ensure()
+    with db.cursor() as c:
+        rows = c.execute("SELECT kind, players_in FROM transactions WHERE deleted=0 AND effective BETWEEN ? AND ?",
+                         (ctx.week_start, ctx.week_end)).fetchall()
+    # trades don't use an add in Yahoo; everything else that brought someone in does
+    return sum(len(json.loads(r["players_in"])) for r in rows if r["kind"] != "trade")
+
+
+def add_budget(ctx) -> dict:
+    limit = db.kv_get("max_adds_week")
+    used = adds_this_week(ctx)
+    return {"limit": limit, "used": used, "left": None if not limit else max(0, limit - used)}

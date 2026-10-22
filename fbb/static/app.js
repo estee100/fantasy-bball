@@ -268,7 +268,9 @@ function renderMoves() {
     : nWorth
       ? `<div class="note"><b>Nothing urgent.</b> ${nWorth} worthwhile upgrade${nWorth > 1 ? "s" : ""}, no rush on any of them.</div>`
       : `<div class="note"><b>Nothing worth doing today.</b> Every option below is a small or uncertain gain; holding is fine.</div>`;
-  el.innerHTML = summary + moves.map((m, i) => `
+  const B = S.recommendations?.add_budget;
+  const budget = B && B.limit ? `<div class="small ${B.left === 0 ? "delta-down" : "muted"}" style="margin:6px 0">Adds this week: <b>${B.used} of ${B.limit}</b> used${B.left === 0 ? ": none left, so nothing below can be done until next week" : B.left === 1 ? ": one left, save it for the best move" : ""}.</div>` : "";
+  el.innerHTML = summary + budget + moves.map((m, i) => `
     <div class="move">
       <div class="swap">
         ${m.urgency ? `<span class="status ${m.urgency === "Do today" ? "st-serious" : m.urgency === "Worth doing" ? "st-good" : ""}" data-tip="${esc(m.urgency_reason || "")}"><span class="dot" ${m.urgency === "Marginal" ? 'style="background:var(--axis)"' : ""}></span>${esc(m.urgency)}</span>` : ""}
@@ -760,6 +762,7 @@ let setupData = null;
 async function loadSetup() {
   setupData = await api("/api/manual");
   renderSetup();
+  api("/api/add-limit").then((b) => { if (b.limit) $("#cfg-adds").value = b.limit; });
   renderFaStatus(await api("/api/free-agents"));
   renderAlertSettings(await api("/api/alerts"));
 }
@@ -775,12 +778,14 @@ function renderSetup() {
     <div class="setting-row"><span>Teams in league</span><input id="cfg-teams" type="number" value="${M.num_teams}"></div>
     <div class="setting-row"><span>Starting slots</span><input id="cfg-active" type="number" value="${M.active_slots}"></div>
     <div class="setting-row"><span>Roster size (excl. IL)</span><input id="cfg-size" type="number" value="${M.roster_size}"></div>
+    <div class="setting-row"><span>Max adds per week <span class="muted small">(blank = no limit)</span></span><input id="cfg-adds" type="number" min="0" placeholder="none"></div>
     <div style="margin-top:10px;display:flex;gap:8px;align-items:center"><button class="btn" id="cfg-save">Save settings</button><span class="small muted" id="cfg-status"></span></div>`;
   $("#cfg-save").addEventListener("click", async () => {
     const weights = {};
     $$("#settings-form [data-w]").forEach((i) => { if (i.value !== "") weights[i.dataset.w] = +i.value; });
     setupData = await api("/api/manual/config", { method: "POST", body: JSON.stringify({
       num_teams: +$("#cfg-teams").value, active_slots: +$("#cfg-active").value, roster_size: +$("#cfg-size").value, point_weights: weights }) });
+    await api("/api/add-limit", { method: "POST", body: JSON.stringify({ max_adds_week: $("#cfg-adds").value === "" ? null : +$("#cfg-adds").value }) });
     $("#cfg-status").textContent = "Saved. Re-running the model…";
     afterManualChange();
   });
@@ -1037,12 +1042,12 @@ function renderLineup() {
     ${D.lineup.map((x) => x.empty ? `<tr><td><span class="slot">${esc(x.slot)}</span></td><td class="muted" colspan="5">empty: nobody eligible with a game</td></tr>` : `<tr>
       <td><span class="slot">${esc(x.slot)}</span></td>
       <td><a href="#" data-pid="${x.nba_id}" class="pname">${esc(x.name)}</a> <span class="pteam">${esc(x.positions.join(","))}${x.pos_source !== "yahoo" ? ` (${esc(x.pos_source)})` : ""}</span></td>
-      <td class="small">${esc(x.game || "")}</td><td class="r num small">${pct(x.avail)}</td><td class="r num">${fmt(x.ev, 1)}</td>
-      <td class="small">${x.current_slot === "BN" ? '<span class="delta-up">▲ start</span>' : ""}</td></tr>`).join("")}
+      <td class="small">${esc(x.game || "")}${x.tip ? ` <span class="muted">${esc(x.tip)}</span>` : ""}</td><td class="r num small">${pct(x.avail)}</td><td class="r num">${fmt(x.ev, 1)}</td>
+      <td class="small">${x.locked ? '<span class="muted" title="His game has started: Yahoo has locked him">🔒 locked</span>' : x.current_slot === "BN" ? '<span class="delta-up">▲ start</span>' : ""}</td></tr>`).join("")}
     </tbody></table></div>
     <div class="small muted" style="margin-top:8px">Bench: ${D.bench.map((b) => `${esc(b.name)} <span class="muted">(${esc(b.reason)})</span>`).join(", ") || "nobody"}</div>
     ${D.unknown_positions.length ? `<div class="small delta-down" style="margin-top:4px">Unknown positions (Util only): ${esc(D.unknown_positions.join(", "))}. Re-paste that team to fix.</div>` : ""}
-    <div class="small muted" style="margin-top:4px">Yahoo locks each player when his game starts. Set this before tip-off, then press "I set this in Yahoo" so the week-to-date score follows the right starters.</div>`;
+    <div class="small muted" style="margin-top:4px">${D.first_tip ? `First tip-off ${isToday ? "today" : "that day"}: <b>${esc(D.first_tip)}</b>. ` : ""}Yahoo locks each player when his game starts${D.locked && D.locked.length ? ` (locked now: ${esc(D.locked.join(", "))})` : ""}. Set this before tip-off, then press "I set this in Yahoo" so the week-to-date score follows the right starters.</div>`;
   const ap = $("#lineup-apply");
   if (ap) ap.addEventListener("click", async () => {
     await api("/api/lineup/apply", { method: "POST" });

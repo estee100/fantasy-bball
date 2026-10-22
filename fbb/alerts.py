@@ -18,7 +18,7 @@ import logging
 import os
 import secrets
 import unicodedata
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import requests
 
@@ -26,6 +26,7 @@ from . import db
 
 log = logging.getLogger(__name__)
 SERVER = "https://ntfy.sh"
+LEAD_MINUTES = 90  # lineup alert this long before your first tip-off of the day
 DEFAULTS = {"enabled": False, "topic": None, "types": {"lineup": True, "moves": True, "news": True, "injury": True},
             "lineup_hour": 11, "last_tip_hour": 19, "quiet_start": 23, "quiet_end": 8, "min_lineup_gain": 3.0}
 
@@ -109,18 +110,23 @@ def run(ctx, now=None) -> dict:
     mine = set(ctx.rosters.get(ctx.my_key, []))
     T = s["types"]
 
-    if T["lineup"] and s["lineup_hour"] <= now.hour < s["last_tip_hour"]:
+    if T["lineup"]:
         from . import lineup
         today = date.today().isoformat()
         plan = lineup.day_plan(ctx, ctx.my_key, today)
-        if plan["gain"] >= s["min_lineup_gain"] and (plan["start"] or plan["sit"]):
+        if plan.get("first_tip_utc"):
+            first = datetime.fromisoformat(plan["first_tip_utc"]).astimezone().replace(tzinfo=None)
+            window_open = now >= max(first - timedelta(minutes=LEAD_MINUTES), now.replace(hour=9, minute=0))
+        else:
+            window_open = s["lineup_hour"] <= now.hour < s["last_tip_hour"]
+        if window_open and plan["gain"] >= s["min_lineup_gain"] and (plan["start"] or plan["sit"]):
             sig = hashlib.sha1(json.dumps([sorted(plan["start"]), sorted(plan["sit"])]).encode()).hexdigest()[:10]
             msg = []
             if plan["start"]:
                 msg.append("Start: " + ", ".join(plan["start"]))
             if plan["sit"]:
                 msg.append("Bench: " + ", ".join(plan["sit"]))
-            msg.append(f"+{plan['gain']:.0f} expected pts. Set it in Yahoo before tip-off.")
+            msg.append(f"+{plan['gain']:.0f} expected pts. First tip-off {plan.get('first_tip') or 'tonight'}: set it in Yahoo before then.")
             if _once(f"lineup:{today}:{sig}", "Lineup changes today", "\n".join(msg), tags="clipboard", priority=4):
                 sent.append("lineup")
 

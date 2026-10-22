@@ -278,3 +278,38 @@ def test_free_agent_list_cleans_outdated_rosters_and_flags_waivers(ctx, pid):
         assert c.execute("SELECT 1 FROM rosters WHERE team_key=? AND nba_id=?", (other, victim)).fetchone() is None
     assert free_agents.availability(pid("Santi Aldama"))["status"] == "W"
     assert free_agents.availability(pid("Nikola Jokić"))["listed"] is False
+
+
+# ---------------------------------------------------------------- weekly add limit & locks
+
+def test_add_limit_blocks_moves_when_used_up(ctx, pid, monkeypatch):
+    from fbb import db, history, recommend, learning
+    monkeypatch.setattr(learning, "log_suggestions", lambda *a, **k: None)
+    db.kv_set("max_adds_week", 1)
+    mine = ctx.rosters[ctx.my_key]
+    free = next(p for p in ctx.values.sort_values("value", ascending=False).index
+                if p not in ctx.rostered() and isinstance(ctx.team_of(p), str) and p not in ctx.injuries)
+    history.record(ctx, "add/drop", [free], [mine[-1]], effective=ctx.week_start if ctx.week_start <= "2026-10-22" else None)
+    assert history.add_budget(ctx)["left"] == 0
+    r = recommend.recommend(ctx, n_sims=300)
+    assert all(m["urgency"] == "No adds left" for m in r["moves"])
+
+
+def test_locked_players_keep_their_slot(ctx):
+    from datetime import timedelta
+    from fbb import lineup, sim
+    d = sim.remaining_dates(ctx)[0]
+    tips = lineup.tip_times(ctx)
+    mine_teams = {ctx.team_of(p) for p in ctx.rosters[ctx.my_key]}
+    today_tips = [t for (team, day), t in tips.items() if day == d and team in mine_teams]
+    if not today_tips:
+        pytest.skip("none of your players play on the first remaining day")
+    plan = lineup.day_plan(ctx, ctx.my_key, d, now=max(today_tips) + timedelta(minutes=1))
+    slots = sim.team_slots(ctx)[ctx.my_key]
+    for x in plan["lineup"]:
+        if not x.get("empty") and x["locked"]:
+            assert slots.get(x["nba_id"]) not in ("BN", None, "?")   # locked starters stay put
+    started = {x["nba_id"] for x in plan["lineup"] if not x.get("empty")}
+    for b in plan["bench"]:
+        if b["locked"]:
+            assert b["nba_id"] not in started                        # locked bench can't come in

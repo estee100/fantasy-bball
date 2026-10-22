@@ -134,8 +134,18 @@ def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11) -> dict:
         picked.append(describe(ctx, B, m))
         if len(picked) >= top:
             break
+    # weekly add limit: at the limit nothing is actionable; with one left, only the best move
+    from . import history
+    budget = history.add_budget(ctx)
+    if budget["left"] is not None:
+        for i, m in enumerate(picked):
+            if budget["left"] == 0:
+                m["urgency"], m["urgency_reason"] = "No adds left", f"you've used all {budget['limit']} adds this week"
+            elif budget["left"] == 1 and i > 0 and m.get("urgency") in ("Do today", "Worth doing"):
+                m["urgency"], m["urgency_reason"] = "Marginal", "only one add left this week: save it for the top move"
     learning.log_suggestions(ctx, picked[:3])
-    return {"moves": picked, "screened": {"free_agents": len(adds), "drops": len(drops), "swaps": len(cands)},
+    return {"moves": picked, "add_budget": budget,
+            "screened": {"free_agents": len(adds), "drops": len(drops), "swaps": len(cands)},
             "base": {"week_win": B["base_win"], "season_strength": B["base_season"],
                      "effective_weeks": B["eff"], "cat_probs": B["base_cats"]}}
 
