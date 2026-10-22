@@ -677,7 +677,7 @@ def trades_status():
 
 class FaIn(BaseModel):
     text: str
-    append: bool = False
+    append: bool | None = None  # None: add to a list started in the last 30 min
 
 
 @app.get("/api/free-agents")

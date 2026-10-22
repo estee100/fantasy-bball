@@ -45,8 +45,8 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("#report-btn").addEventListener("click", submitReport);
   $("#team-btn").addEventListener("click", importTeam);
-  $("#fa-btn").addEventListener("click", () => importFa(false));
-  $("#fa-add").addEventListener("click", () => importFa(true));
+  $("#fa-btn").addEventListener("click", () => importFa(null));
+  $("#fa-add").addEventListener("click", () => importFa(false));
   initWatchPicker();
   initCheckPicker();
   initHistoryForm();
@@ -1419,7 +1419,7 @@ async function importFa(append) {
   const r = await fetch("/api/free-agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, append }) });
   const d = await r.json();
   if (!r.ok) { st.textContent = d.detail || "Import failed"; return; }
-  const bits = [`${d.added_now} players imported (${d.players} on the list, ${d.on_waivers} on waivers).`];
+  const bits = [`${d.added_now} players imported ${d.appended ? "and added to the list" : "as a new list"}: ${d.players} players now, ${d.on_waivers} on waivers. Next page: click Next 25 in Yahoo, copy, paste, Import page.`];
   if (d.removed_from_outdated_rosters.length) bits.push(`Removed from outdated pasted rosters: ${d.removed_from_outdated_rosters.join(", ")}.`);
   if (d.listed_but_on_your_roster.length) bits.push(`On your roster but listed as available (did you drop them?): ${d.listed_but_on_your_roster.join(", ")}.`);
   if (d.unmatched.length) bits.push(`Couldn't match: ${d.unmatched.join(", ")}.`);

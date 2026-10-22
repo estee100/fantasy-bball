@@ -18,6 +18,7 @@ from . import db, news
 from .manual import _PLAYER_LINE, clean_line
 
 FRESH_DAYS = 3
+SESSION_MINUTES = 30  # pages pasted within this long of each other build one list
 _WAIVER = re.compile(r"^W \(([A-Z][a-z]{2}) (\d{1,2})\)")
 _MONTHS = {m: i for i, m in enumerate(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
 
@@ -63,11 +64,17 @@ def parse(text: str, today=None) -> tuple[list, list]:
     return players, sorted(set(unmatched))
 
 
-def import_list(text: str, append=False) -> dict:
+def import_list(text: str, append=None) -> dict:
+    """append=None (the default): add to the list if the last page was pasted within
+    SESSION_MINUTES (you're pasting page 2, 3, ...), otherwise start a fresh list."""
     players, unmatched = parse(text)
     if not players:
         raise ValueError("No players found. Paste Yahoo's Players page (Status: All Available Players).")
-    prev = (db.kv_get("fa_list") or {}).get("players", {}) if append else {}
+    old = db.kv_get("fa_list") or {}
+    if append is None:
+        recent = old.get("created") and (datetime.now().astimezone() - datetime.fromisoformat(old["created"])).total_seconds() < SESSION_MINUTES * 60
+        append = bool(recent)
+    prev = old.get("players", {}) if append else {}
     merged = dict(prev)
     merged.update({str(p["nba_id"]): p for p in players})
     db.kv_set("fa_list", {"created": db.now_iso(), "players": merged})
@@ -86,7 +93,7 @@ def import_list(text: str, append=False) -> dict:
                     # Yahoo's list is newer than that team's paste: they must have dropped him
                     c.execute("DELETE FROM rosters WHERE team_key=? AND nba_id=?", (r["team_key"], p["nba_id"]))
                     cleaned.append(f"{pnames.get(p['nba_id'])} (was on {team})")
-    return {"players": len(merged), "added_now": len(players),
+    return {"players": len(merged), "added_now": len(players), "appended": append,
             "on_waivers": sum(1 for p in merged.values() if p["status"] == "W"), "unmatched": unmatched,
             "removed_from_outdated_rosters": cleaned, "listed_but_on_your_roster": on_mine}
 

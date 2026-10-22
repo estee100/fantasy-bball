@@ -272,7 +272,7 @@ def test_free_agent_list_cleans_outdated_rosters_and_flags_waivers(ctx, pid):
     other = next(k for k in ctx.rosters if k != ctx.my_key)
     victim = ctx.rosters[other][0]
     text = f"{ctx.name(victim)}\n{ctx.name(victim)}Player Note XXX - PG\nFA\nSanti Aldama\nSanti AldamaPlayer Note DAL - PF,C\nW (Dec 31)\n"
-    res = free_agents.import_list(text)
+    res = free_agents.import_list(text, append=False)
     assert any(ctx.name(victim) in x for x in res["removed_from_outdated_rosters"])
     with db.cursor() as c:
         assert c.execute("SELECT 1 FROM rosters WHERE team_key=? AND nba_id=?", (other, victim)).fetchone() is None
@@ -313,3 +313,13 @@ def test_locked_players_keep_their_slot(ctx):
     for b in plan["bench"]:
         if b["locked"]:
             assert b["nba_id"] not in started                        # locked bench can't come in
+
+
+def test_free_agent_pages_pasted_together_build_one_list(ctx, pid):
+    from fbb import free_agents
+    page = lambda name, team, pos: f"{name}\n{name}Player Note {team} - {pos}\nFA\n"
+    free_agents.import_list(page("Santi Aldama", "DAL", "PF,C"), append=False)
+    r = free_agents.import_list(page("Precious Achiuwa", "SAC", "PF,C"))   # default: auto
+    assert r["appended"] and r["players"] == 2
+    r = free_agents.import_list(page("Bilal Coulibaly", "WAS", "SG,SF"), append=False)
+    assert r["players"] == 1

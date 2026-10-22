@@ -257,12 +257,12 @@
       <div class="bd">
         <ol class="small ink2" style="margin:0 0 8px;padding-left:18px;line-height:1.7">
           <li>In Yahoo: your league → <b>Players</b> → Status: <b>All Available Players</b> (keeps waiver players in; default ranking).</li>
-          <li>Ctrl+A, Ctrl+C, paste below. For more than 25 players, go to the next page and press <b>Add another page</b>.</li>
+          <li>Ctrl+A, Ctrl+C, paste below. Press <b>Import page</b>. Then click <b>Next 25</b> in Yahoo and repeat: pages pasted within 30 minutes build one list.</li>
         </ol>
         <textarea id="fa-text" placeholder="Paste Yahoo's available-players page here…" style="min-height:90px"></textarea>
         <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
-          <button class="btn primary" id="fa-btn">Import (replaces the list)</button>
-          <button class="btn" id="fa-add">Add another page</button>
+          <button class="btn primary" id="fa-btn">Import page</button>
+          <button class="btn" id="fa-add" title="Throw away the current list and start from this page">Start a new list</button>
           <span class="small muted" id="fa-status"></span>
         </div>
       </div>
