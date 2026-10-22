@@ -61,8 +61,7 @@ def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11) -> dict:
     base_a = sim.simulate_team(ctx, mine, dates, n_sims, seed, wtd_me)
     base_win, base_cats, _ = sim.score_totals(ctx, base_a, b)
     base_win = sim.calibrated(base_win, ctx.params)
-    avg = sim.league_average_dist(ctx)
-    base_season = sim.season_strength(ctx, mine, avg)
+    base_season = sim.season_strength(ctx, mine)
     eff = effective_weeks(ctx)
 
     rostered = ctx.rostered()
@@ -83,7 +82,7 @@ def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11) -> dict:
             win, cats, _ = sim.score_totals(ctx, A, b)
             win = sim.calibrated(win, ctx.params)
             dw = win - base_win
-            ds = (sim.season_strength(ctx, new, avg) - base_season) * eff
+            ds = (sim.season_strength(ctx, new) - base_season) * eff
             kind = "stream" if ds < 0 < dw else "upgrade"
             edge, raw_conf = horizon_edge(ctx, a, d, dates, kind)
             cands.append({"add": a, "drop": d, "kind": kind, "week_dwin": dw, "season_dwins": ds,
@@ -106,9 +105,64 @@ def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11) -> dict:
         picked.append(m)
         if len(picked) >= top:
             break
+    for m in picked:
+        m.update(urgency(ctx, m, mine, opp, dates, b, wtd_me, n_sims, seed))
     learning.log_suggestions(ctx, picked[:3])
     return {"moves": picked, "base": {"week_win": base_win, "season_strength": base_season,
                                       "effective_weeks": eff, "cat_probs": base_cats}}
+
+
+URGENT_WAIT_COST = 0.02   # wins lost by waiting a day; ~2pp is just above simulation noise
+
+
+def urgency(ctx, m, mine, opp, dates, b, wtd_me, n_sims, seed) -> dict:
+    """Is there a reason to do this today rather than whenever?
+
+    Two measurable reasons:
+      waiting costs: simulate making the move tomorrow instead (today's games come from your
+        current roster) and compare this week's win chance; plus the season gain lost per day
+      it may not last: fresh positive news or a role-growth alert on the player you'd add
+    Labels: 'Do today', 'Worth doing' (clear gain, no rush), 'Marginal' (small or uncertain)."""
+    from datetime import date
+    today = (ctx.today or date.today().isoformat())
+    a, d = m["add"], m["drop"]
+    new = [p for p in mine if p != d] + [a]
+    wait_cost = 0.0
+    if dates and dates[0] == today and len(dates) > 1:
+        if any(dd == today for dd, _ in sim.player_games(ctx, a, [today])):
+            first = sim.simulate_team(ctx, mine, dates[:1], n_sims, seed, wtd_me)
+            rest = sim.simulate_team(ctx, new, dates[1:], n_sims, seed + 7)
+            win_tmrw, _, _ = sim.score_totals(ctx, first + rest, b)
+            win_tmrw = sim.calibrated(win_tmrw, ctx.params)
+            # same split (today | rest) and seeds as the "tomorrow" run, so only the swap differs
+            full = sim.simulate_team(ctx, new, dates[:1], n_sims, seed, wtd_me) + rest
+            win_now, _, _ = sim.score_totals(ctx, full, b)
+            win_now = sim.calibrated(win_now, ctx.params)
+            wait_cost += max(0.0, win_now - win_tmrw)
+    days_left = max(1.0, effective_weeks(ctx) * 7)
+    wait_cost += max(0.0, m["season_dwins"]) / days_left
+    hot = []
+    ev = ctx.events.get(a)
+    if ev and ev.get("direction", 0) > 0:
+        hot.append(f"news: {ev.get('takeaway') or ev['event_type']}")
+    with db.cursor() as c:
+        al = c.execute("SELECT title FROM alerts WHERE nba_id=? AND kind='role_expansion' AND active=1", (a,)).fetchone()
+    if al:
+        hot.append(al["title"])
+    score, conf = m["score"], m["confidence"]
+    if (wait_cost >= URGENT_WAIT_COST and score > 0.1) or (hot and score >= 0.2 and conf >= 0.6):
+        label = "Do today"
+        why = []
+        if wait_cost >= URGENT_WAIT_COST:
+            why.append(f"waiting a day costs ~{wait_cost * 100:.1f}% of a win (he plays today)")
+        if hot:
+            why.append("he may not last on waivers (" + hot[0][:80] + ")")
+        reason = "; ".join(why)
+    elif score >= 0.25 and conf >= 0.65:
+        label, reason = "Worth doing", "clear gain, but it's spread over the season: no rush"
+    else:
+        label, reason = "Marginal", "small or uncertain gain: fine to skip or wait"
+    return {"urgency": label, "urgency_reason": reason, "wait_cost": wait_cost}
 
 
 def in_rotation(ctx, pid) -> bool:
@@ -218,10 +272,9 @@ def evaluate_trade(ctx, give: list, get: list) -> dict:
     new_mine = fix_size([p for p in mine if p not in give] + list(get))
     new_theirs = fix_size([p for p in theirs if p not in get] + list(give))
     eff = effective_weeks(ctx)
-    avg = sim.league_average_dist(ctx)
-    me = (sim.season_strength(ctx, new_mine, avg) - sim.season_strength(ctx, mine, avg)) * eff
-    them = (sim.season_strength(ctx, new_theirs, avg) - sim.season_strength(ctx, theirs, avg)) * eff \
-        if theirs else None
+    me = (sim.season_strength(ctx, new_mine) - sim.season_strength(ctx, mine)) * eff
+    them = (sim.season_strength(ctx, new_theirs, exclude_key=other_key)
+            - sim.season_strength(ctx, theirs, exclude_key=other_key)) * eff if theirs else None
     cat_shift = {}
     if model.scoring_mode() == "categories":
         for k in ctx.cats:

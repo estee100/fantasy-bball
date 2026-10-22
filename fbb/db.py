@@ -115,7 +115,7 @@ def cursor():
 
 def _migrate(conn):
     cols = {r[1] for r in conn.execute("PRAGMA table_info(moves)")}
-    for col in ("kind", "horizon_end"):
+    for col in ("kind", "horizon_end", "urgency"):
         if col not in cols:
             conn.execute(f"ALTER TABLE moves ADD COLUMN {col} TEXT")
 

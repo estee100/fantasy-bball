@@ -256,9 +256,17 @@ function renderMoves() {
   const moves = S.recommendations?.moves || [];
   const el = $("#moves");
   if (!moves.length) { el.innerHTML = `<div class="empty">No free agent improves your expected wins right now.</div>`; return; }
-  el.innerHTML = moves.map((m, i) => `
+  const nToday = moves.filter((m) => m.urgency === "Do today").length;
+  const nWorth = moves.filter((m) => m.urgency === "Worth doing").length;
+  const summary = nToday
+    ? `<div class="note" style="border-left:3px solid var(--serious)"><b>${nToday} move${nToday > 1 ? "s" : ""} to make today.</b> The rest can wait.</div>`
+    : nWorth
+      ? `<div class="note"><b>Nothing urgent.</b> ${nWorth} worthwhile upgrade${nWorth > 1 ? "s" : ""}, no rush on any of them.</div>`
+      : `<div class="note"><b>Nothing worth doing today.</b> Every option below is a small or uncertain gain; holding is fine.</div>`;
+  el.innerHTML = summary + moves.map((m, i) => `
     <div class="move">
       <div class="swap">
+        ${m.urgency ? `<span class="status ${m.urgency === "Do today" ? "st-serious" : m.urgency === "Worth doing" ? "st-good" : ""}" data-tip="${esc(m.urgency_reason || "")}"><span class="dot" ${m.urgency === "Marginal" ? 'style="background:var(--axis)"' : ""}></span>${esc(m.urgency)}</span>` : ""}
         <span class="chip k-${m.kind}" data-tip="${m.kind === "stream" ? "Stream: helps this week's matchup; judged on the rest of this week" : "Upgrade: helps this week and beyond; judged over the next 21 days"}">${m.kind === "stream" ? "Stream" : "Upgrade"}</span>
         <span class="add"><span class="sign">+</span> <a href="#" data-pid="${m.add}">${esc(m.add_name)}</a> <span class="pteam">${esc(m.add_team || "")} · ${m.add_games} g</span></span>
         <span class="drop"><span class="sign">−</span> <a href="#" data-pid="${m.drop}">${esc(m.drop_name)}</a> <span class="pteam">${esc(m.drop_team || "")} · ${m.drop_games} g</span></span>
@@ -267,7 +275,7 @@ function renderMoves() {
         <div data-tip="Change in this week's win probability (same simulated games for everyone else). Within about ±1.5pp is simulation noise, shown as ≈0."><b>${Math.abs(m.week_dwin * 100) < 1.5 ? "≈0" : signed(m.week_dwin * 100, 1)}</b><span>pp this week</span></div>
         <div data-tip="Extra matchup wins over the rest of the season (future weeks discounted)"><b>${signed(m.season_dwins, 2)}</b><span>wins ROS</span></div>
       </div>
-      <ul>${(m.rationale || []).map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
+      <ul>${m.urgency_reason ? `<li><b>${esc(m.urgency)}:</b> ${esc(m.urgency_reason)}</li>` : ""}${(m.rationale || []).map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
       <div class="actions">
         <span class="conf" data-tip="Chance the added player actually outproduces the dropped one over the move's horizon${S.calibration?.n ? ", calibrated on " + S.calibration.n + " scored moves" : " (uncalibrated until moves are scored)"}">
           Confidence <span class="meter"><span style="width:${m.confidence * 100}%"></span></span><b class="num">${pct(m.confidence)}</b></span>

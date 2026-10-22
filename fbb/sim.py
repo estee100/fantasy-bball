@@ -386,12 +386,95 @@ def expected_week_games(ctx: Context, pid, games_per_week=3.5) -> float:
     return games_per_week * model.ros_availability(pid, ctx.injuries, ctx.events)
 
 
-def season_strength(ctx: Context, pids, opp_dist=None) -> float:
-    """Expected weekly win probability vs a league-average opponent, using ROS projections."""
+def season_strength(ctx: Context, pids, opp_dist=None, exclude_key=None) -> float:
+    """Expected weekly win rate over the rest of the season, using ROS projections.
+
+    Averaged over the league's actual teams (you play each of them, not an 'average team');
+    falls back to a league-average opponent when other rosters aren't known."""
     dist = team_season_dist(ctx, pids)
-    if opp_dist is None:
-        opp_dist = league_average_dist(ctx)
-    return model.matchup_odds(dist, opp_dist)[0]
+    if opp_dist is not None:
+        return calibrated_season(model.matchup_odds(dist, opp_dist)[0], ctx.params)
+    opps = opponent_dists(ctx, exclude_key if exclude_key is not None else ctx.my_key)
+    if not opps:
+        return calibrated_season(model.matchup_odds(dist, league_average_dist(ctx))[0], ctx.params)
+    return float(np.mean([calibrated_season(model.matchup_odds(dist, od)[0], ctx.params) for od in opps]))
+
+
+def opponent_dists(ctx: Context, exclude_key) -> list:
+    cache = ctx._pools.setdefault("_opp_dists", {})
+    if exclude_key not in cache:
+        cache[exclude_key] = [team_season_dist(ctx, ids) for k, ids in ctx.rosters.items()
+                              if k != exclude_key and ids]
+    return cache[exclude_key]
+
+
+def calibrated_season(p: float, params: dict) -> float:
+    T = params.get("season_temperature", 1.0) or 1.0
+    if abs(T - 1.0) < 1e-6:
+        return p
+    p = min(max(p, 1e-4), 1 - 1e-4)
+    return 1 / (1 + ((1 - p) / p) ** (1 / T))
+
+
+def player_fp_sd(ctx: Context, pid) -> float | None:
+    """Single-game fantasy-point spread from the player's own recent games. Summing per-stat
+    variances would understate it: points, rebounds and assists rise and fall together."""
+    cache = ctx._pools.setdefault("_fp_sd", {})
+    if pid not in cache:
+        pw = model.point_weights()
+        g = ctx.logs[ctx.logs["nba_id"] == pid].sort_values("game_date").tail(40)
+        if len(g) >= 8 and pw:
+            fp = sum(g[s] * w for s, w in pw.items() if s in g)
+            cache[pid] = float(fp.std())
+        else:
+            cache[pid] = None
+    return cache[pid]
+
+
+def team_dist(ctx: Context, pids, dates, per_week=True) -> dict:
+    """Normal approximation of a team's totals over `dates` (rescaled to 7 days if per_week),
+    with the same variance sources the simulator has:
+      game-to-game spread  x expected games started
+      games-played spread  (absences: each scheduled game is a coin flip at the availability rate)
+      weekly form          (the player's level itself drifts: weekly_form_sd)"""
+    tds = {p: team_dates(ctx, ctx.team_of(p)) for p in pids}
+    avail = {p: model.ros_availability(p, ctx.injuries, ctx.events) for p in pids}
+    ranked = sorted(pids, key=lambda p: -ctx.values["value"].get(p, -99))
+    used = {p: 0.0 for p in pids}
+    nvar = {p: 0.0 for p in pids}
+    for d in dates:
+        slots = float(ctx.active_slots)
+        for p in ranked:
+            if d in tds[p] and slots > 0:
+                a = avail[p]
+                g = min(a, slots)
+                used[p] += g
+                nvar[p] += a * (1 - a)
+                slots -= g
+    scale = 7 / len(dates) if per_week and dates else 1.0
+    form_sd = float(ctx.params.get("weekly_form_sd", 0.0) or 0.0)
+    cats = model.league_categories() if model.scoring_mode() == "categories" else ["_points"]
+    pw = model.point_weights()
+    res = {}
+    for k in cats:
+        mu = var = 0.0
+        for p in pids:
+            if p not in ctx.proj.index or used[p] <= 0:
+                continue
+            row = ctx.proj.loc[p]
+            m = model.production_multiplier(p, ctx.events, ctx.params)
+            if k == "_points":
+                pm = m * sum(row[s] * w for s, w in pw.items() if s in row)
+                sd = player_fp_sd(ctx, p)
+                ps = sd * sd if sd is not None else sum((row[s + "_sd"] * w) ** 2 for s, w in pw.items() if s + "_sd" in row)
+            else:
+                col = model.cat_column(k)
+                pm, ps = m * row[col], row[col + "_sd"] ** 2
+            g, gv = used[p] * scale, nvar[p] * scale
+            mu += g * pm
+            var += g * ps + gv * pm * pm + (form_sd * g * pm) ** 2
+        res[k] = (mu, var)
+    return res
 
 
 SEASON_LOOKAHEAD_DAYS = 28
@@ -425,9 +508,8 @@ def used_games_per_week(ctx: Context, pids) -> dict:
 
 
 def team_season_dist(ctx: Context, pids):
-    """Typical-week distribution over the upcoming schedule, active-slot cap included."""
-    mult = {p: model.production_multiplier(p, ctx.events, ctx.params) for p in pids}
-    return model.team_week_dist(used_games_per_week(ctx, pids), ctx.proj, mult)
+    """Typical-week distribution over the next 4 weeks of real schedule, slot cap included."""
+    return team_dist(ctx, pids, lookahead_dates(ctx), per_week=True)
 
 
 def league_average_dist(ctx: Context):

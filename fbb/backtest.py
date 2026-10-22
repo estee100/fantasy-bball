@@ -123,9 +123,12 @@ def run(season=None, weeks_skip=2, max_weeks=None, num_teams=12, roster_size=13,
                     A = sim.simulate_team(ctx, a, dates, N_SIMS, seed=wi * 1000 + lg)
                     B = sim.simulate_team(ctx, b, dates, N_SIMS, seed=wi * 1000 + lg + 1)
                     p, _, _ = sim.score_totals(ctx, A, B)
+                    # the rest-of-season formula, applied to this exact week
+                    p_an = model.matchup_odds(sim.team_dist(ctx, a, dates, per_week=False),
+                                              sim.team_dist(ctx, b, dates, per_week=False))[0]
                     ra, rb = _actual_totals(ctx, logs_all, a, ws), _actual_totals(ctx, logs_all, b, ws)
                     res, _, _ = sim.score_totals(ctx, ra[None, :], rb[None, :])
-                    rows.append({"week": ws.date().isoformat(), "p": p, "result": res})
+                    rows.append({"week": ws.date().isoformat(), "p": p, "p_an": p_an, "result": res})
     finally:
         db.kv_set("value_scales", saved_scales)
         model.HEALTHY_GAME, model.HEALTHY_ROS = saved_rates
@@ -179,14 +182,6 @@ def summarize(rows) -> dict:
             "bins_raw": _bins(ps, ys), "bins_calibrated": _bins([apply_temperature(p, T_used) for p in ps], ys)}
 
 
-def calibrate_and_store(report: dict):
-    stored = db.kv_get("model_params", {})
-    stored["win_prob_temperature"] = report["T_used"]
-    db.kv_set("model_params", stored)
-    db.kv_set("matchup_backtest", {k: v for k, v in report.items()} | {"created": db.now_iso()})
-
-
-
 FORM_GRID = [0.0, 0.1, 0.15, 0.2, 0.3, 0.4]
 
 
@@ -214,6 +209,9 @@ def calibrate(season=None) -> dict:
     chosen = runs[best_sd]
     report = {k: v for k, v in chosen.items() if k != "rows"}
     report["form_sd"] = best_sd
+    # the season formula, scored on the same matchups (form spread as chosen above)
+    an = summarize([{"week": r["week"], "p": r["p_an"], "result": r["result"]} for r in chosen["rows"]])
+    report["season_formula"] = {k: an[k] for k in ("raw", "calibrated", "holdout", "T_fit", "T_used", "bins_raw")}
     report["form_table"] = table
     report["miss_rates"] = rates
     return report
@@ -223,6 +221,8 @@ def store(report: dict):
     stored = db.kv_get("model_params", {})
     stored["weekly_form_sd"] = report["form_sd"]
     stored["win_prob_temperature"] = report["T_used"]
+    if report.get("season_formula"):
+        stored["season_temperature"] = report["season_formula"]["T_used"]
     stored["miss_rate_short"] = report["miss_rates"]["short"]
     stored["miss_rate_all"] = report["miss_rates"]["all"]
     db.kv_set("model_params", stored)

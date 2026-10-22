@@ -32,16 +32,17 @@ def log_suggestions(ctx, moves):
     with db.cursor() as c:
         for m in moves:
             c.execute("""INSERT INTO moves(created, week, add_id, drop_id, pred_week_dwin, pred_season_dwins,
-                         confidence, raw_confidence, rationale, status, kind, horizon_end)
-                         VALUES (?,?,?,?,?,?,?,?,?, 'suggested', ?, ?)
+                         confidence, raw_confidence, rationale, status, kind, horizon_end, urgency)
+                         VALUES (?,?,?,?,?,?,?,?,?, 'suggested', ?, ?, ?)
                          ON CONFLICT(add_id, drop_id, week) DO UPDATE SET
                            pred_week_dwin=excluded.pred_week_dwin, pred_season_dwins=excluded.pred_season_dwins,
                            confidence=excluded.confidence, raw_confidence=excluded.raw_confidence,
-                           rationale=excluded.rationale, kind=excluded.kind, horizon_end=excluded.horizon_end
+                           rationale=excluded.rationale, kind=excluded.kind, horizon_end=excluded.horizon_end,
+                           urgency=excluded.urgency
                          WHERE moves.status='suggested'""",
                       (db.now_iso(), ctx.week, int(m["add"]), int(m["drop"]), m["week_dwin"],
                        m["season_dwins"], m["confidence"], m["raw_confidence"], json.dumps(m["rationale"]),
-                       m["kind"], horizon_end(ctx, m["kind"])))
+                       m["kind"], horizon_end(ctx, m["kind"]), m.get("urgency")))
 
 
 def horizon_end(ctx, kind) -> str:

@@ -111,13 +111,12 @@ def _has_season(season) -> bool:
 
 def league_table(ctx) -> list:
     """Each fantasy team's typical-week category totals and league rank, plus overall strength."""
-    avg = sim.league_average_dist(ctx)
     rows = []
     for key, pids in ctx.rosters.items():
         dist = sim.team_season_dist(ctx, pids)
         rows.append({"team_key": key, "name": ctx.teams.get(key, {}).get("name", key),
                      "is_mine": key == ctx.my_key, "is_opp": key == ctx.opp_key,
-                     "strength": sim.season_strength(ctx, pids, avg) if avg else None,
+                     "strength": sim.season_strength(ctx, pids, exclude_key=key) if pids else None,
                      "cats": {k: v[0] for k, v in dist.items()},
                      "record": [ctx.teams.get(key, {}).get(x) for x in ("wins", "losses", "ties")]})
     for k in (rows[0]["cats"] if rows else {}):
