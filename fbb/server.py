@@ -588,3 +588,40 @@ def take_clear(nba_id: int):
     overrides.clear(nba_id)
     _manual_changed()
     return {"ok": True}
+
+
+
+# ---------------------------------------------------------------- phone alerts
+
+class AlertCfgIn(BaseModel):
+    enabled: bool | None = None
+    types: dict | None = None
+    lineup_hour: int | None = None
+    new_topic: bool = False
+
+
+@app.get("/api/alerts")
+def alerts_get():
+    from . import alerts
+    return _json(alerts.settings())
+
+
+@app.post("/api/alerts")
+def alerts_set(a: AlertCfgIn):
+    from . import alerts
+    if a.new_topic:
+        alerts.save(topic=alerts.new_topic())
+    return _json(alerts.save(enabled=a.enabled, types=a.types, lineup_hour=a.lineup_hour))
+
+
+@app.post("/api/alerts/test")
+def alerts_test():
+    from . import alerts
+    s = alerts.settings()
+    if not s.get("topic"):
+        raise HTTPException(400, "Turn alerts on first")
+    ok = alerts.send("Fantasy Hoops HQ", "Test alert: you're all set. Lineup and move alerts will arrive here.",
+                     tags="white_check_mark")
+    if not ok:
+        raise HTTPException(502, "Couldn't reach ntfy.sh")
+    return {"ok": True}

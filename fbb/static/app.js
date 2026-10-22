@@ -753,6 +753,7 @@ let setupData = null;
 async function loadSetup() {
   setupData = await api("/api/manual");
   renderSetup();
+  renderAlertSettings(await api("/api/alerts"));
 }
 
 function renderSetup() {
@@ -1294,4 +1295,46 @@ async function loadTakes() {
         <span class="small">you ${fmt(t.your_per_game, 1)} · model ${fmt(t.model_per_game, 1)}${t.actual_per_game != null ? ` · actual <b>${fmt(t.actual_per_game, 1)}</b> ${unit}/g over ${t.games} g (${fmt(t.actual_min, 1)} min)` : " · no games yet"}</span></span>
       <span class="small">${t.closer ? `<span class="status ${t.closer === "you" ? "st-good" : "st-warning"}"><span class="dot"></span>${t.closer === "you" ? "You're closer" : "Model's closer"}</span>${t.games < 3 ? '<br><span class="muted">early</span>' : ""}` : ""}</span></div>`).join("");
   bindPlayerLinks(el);
+}
+
+/* ------------------------------------------------------------------ phone alerts */
+function renderAlertSettings(A) {
+  const el = $("#alerts-settings");
+  const T = A.types;
+  const labels = { lineup: "Lineup changes (late morning)", moves: '"Do today" moves', news: "News on your players", injury: "Injury status changes" };
+  el.innerHTML = `
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <label style="display:flex;gap:6px;align-items:center;font-weight:600"><input type="checkbox" id="al-on" ${A.enabled ? "checked" : ""}> Send alerts to my phone</label>
+      ${A.enabled ? `<button class="btn small" id="al-test">Send a test alert</button><span class="small muted" id="al-status"></span>` : ""}
+    </div>
+    ${A.enabled ? `
+    <ol class="small ink2" style="margin:10px 0 6px;padding-left:18px;line-height:1.7">
+      <li>Install <b>ntfy</b> from the App Store or Google Play (free, no account).</li>
+      <li>Tap <b>+</b> (subscribe to topic) and enter exactly: <code style="user-select:all;background:var(--surface-2);padding:2px 6px;border-radius:4px">${esc(A.topic)}</code></li>
+      <li>Press "Send a test alert" above to check it arrives.</li>
+    </ol>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:6px">${Object.keys(labels).map((k) =>
+      `<label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-al="${k}" ${T[k] ? "checked" : ""}> ${labels[k]}</label>`).join("")}</div>
+    <div class="small muted" style="margin-top:8px">Only short alert text is sent, via ntfy.sh. The channel name is long and random so others can't guess it;
+      <a href="#" id="al-rotate">make a new one</a> if you ever share it by mistake. Nothing is sent between 11pm and 8am.</div>` :
+      `<div class="small muted" style="margin-top:6px">Free push notifications through the ntfy app. Turn on to get the setup steps.</div>`}`;
+  $("#al-on").addEventListener("change", async (e) => {
+    renderAlertSettings(await api("/api/alerts", { method: "POST", body: JSON.stringify({ enabled: e.target.checked }) }));
+  });
+  $$("[data-al]", el).forEach((c) => c.addEventListener("change", async () => {
+    const types = {}; $$("[data-al]", el).forEach((x) => { types[x.dataset.al] = x.checked; });
+    await api("/api/alerts", { method: "POST", body: JSON.stringify({ types }) });
+  }));
+  const t = $("#al-test");
+  if (t) t.addEventListener("click", async () => {
+    $("#al-status").textContent = "Sending…";
+    const r = await fetch("/api/alerts/test", { method: "POST" });
+    $("#al-status").textContent = r.ok ? "Sent. Check your phone." : ((await r.json()).detail || "Failed");
+  });
+  const rot = $("#al-rotate");
+  if (rot) rot.addEventListener("click", async (e) => {
+    e.preventDefault();
+    if (!confirm("Make a new channel name? You'll need to re-subscribe in the ntfy app.")) return;
+    renderAlertSettings(await api("/api/alerts", { method: "POST", body: JSON.stringify({ new_topic: true }) }));
+  });
 }

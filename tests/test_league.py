@@ -177,3 +177,47 @@ def test_tuning_ignores_takes(ctx, pid):
     overrides.set_take(ctx, pid("Jared McCain"), "pct", 50)
     fresh = model.project(ctx.logs, ctx.params)       # what tuning/backtests use
     assert fresh.at[pid("Jared McCain"), "min"] == pytest.approx(ctx.raw_proj.at[pid("Jared McCain"), "min"])
+
+
+# ---------------------------------------------------------------- phone alerts
+
+@pytest.fixture
+def outbox(monkeypatch):
+    """Capture alerts instead of sending them."""
+    from fbb import alerts
+    box = []
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        box.append({"url": url, "title": headers["Title"], "body": data.decode()})
+        return Resp()
+    monkeypatch.delenv("FBB_NO_ALERTS", raising=False)
+    monkeypatch.setattr(alerts.requests, "post", fake_post)
+    return box
+
+
+def test_injury_change_alerts_once_and_respects_quiet_hours(ctx, outbox):
+    from datetime import datetime
+    from fbb import alerts
+    alerts.save(enabled=True, types={"lineup": False, "moves": False, "news": False, "injury": True})
+    noon, night = datetime(2026, 10, 22, 12), datetime(2026, 10, 22, 2)
+    alerts.run(ctx, now=noon)                                  # first run: takes a snapshot only
+    assert outbox == []
+    p = ctx.rosters[ctx.my_key][0]
+    ctx.injuries[p] = {"nba_id": p, "status": "Out", "comment": "ankle sprain", "date": "2026-10-22"}
+    assert alerts.run(ctx, now=night)["reason"] == "quiet hours"   # waits overnight
+    assert outbox == []
+    alerts.run(ctx, now=noon)
+    assert len(outbox) == 1 and "Out" in outbox[0]["title"] and "/fbb-" in outbox[0]["url"]
+    alerts.run(ctx, now=noon)                                  # no duplicates
+    assert len(outbox) == 1
+
+
+def test_alerts_off_by_default_and_titles_ascii(ctx, outbox):
+    from fbb import alerts
+    assert alerts.settings()["enabled"] is False
+    assert alerts.run(ctx)["reason"] == "disabled"
+    assert alerts._ascii("Luka Dončić: Out") == "Luka Doncic: Out"

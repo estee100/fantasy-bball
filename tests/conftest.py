@@ -10,6 +10,9 @@ from pathlib import Path
 
 import pytest
 
+import os
+os.environ["FBB_NO_ALERTS"] = "1"   # the suite must never push real notifications
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 FIXTURES = Path(__file__).parent / "fixtures"

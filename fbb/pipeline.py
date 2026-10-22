@@ -86,8 +86,9 @@ def refresh(daily=False) -> dict:
         _step(status, "start_sit", lambda: db.kv_set("start_sit", recommend.start_sit_today(ctx)) or "ok")
         _step(status, "evaluate_moves", learning.evaluate_moves, ctx.logs)
         _step(status, "resolve_matchups", learning.resolve_from_box_scores, ctx)
-        from . import history
+        from . import alerts, history
         _step(status, "history", history.evaluate, ctx)
+        _step(status, "alerts", alerts.run, ctx)
         _step(status, "league_table", lambda: db.kv_set("league_table", league_table(ctx)) or "ok")
 
         if daily or db.kv_get("daily_done") != date.today().isoformat():
