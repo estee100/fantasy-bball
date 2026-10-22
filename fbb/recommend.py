@@ -234,6 +234,10 @@ def urgency(ctx, m, mine, opp, dates, b, wtd_me, n_sims, seed) -> dict:
     score, conf = m["score"], m["confidence"]
     from . import free_agents
     av = free_agents.availability(a)
+    if av["known"] and not av["listed"] and len(free_agents.listed_ids()) >= 75:
+        # a fresh 75+ player Yahoo list that doesn't include him: he's most likely owned
+        return {"urgency": "Confirm first", "wait_cost": wait_cost,
+                "urgency_reason": "not in Yahoo's available list you pasted: he was probably picked up. Check before acting"}
     if av["status"] == "W" and score > 0.1:
         return {"urgency": "Waiver claim", "wait_cost": wait_cost,
                 "urgency_reason": f"he's on waivers until {av['until']}: put in a claim now, he can't be added before then"}
