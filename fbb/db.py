@@ -68,6 +68,10 @@ CREATE TABLE IF NOT EXISTS matchup_predictions (
     result REAL, resolved_at TEXT,
     UNIQUE (week, team_key, kind)
 );
+CREATE TABLE IF NOT EXISTS watchlist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, nba_id INTEGER, compare_id INTEGER,
+    note TEXT, snapshot TEXT, active INTEGER DEFAULT 1
+);
 CREATE TABLE IF NOT EXISTS backtests (
     id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, params TEXT, model_err REAL,
     baseline_err REAL, n INTEGER

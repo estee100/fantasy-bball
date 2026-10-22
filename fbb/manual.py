@@ -140,3 +140,70 @@ def summary() -> dict:
             "num_teams": db.kv_get("num_teams", 10), "active_slots": db.kv_get("active_slots", 10),
             "roster_size": db.kv_get("roster_size", 13), "scoring_mode": db.kv_get("scoring_mode", "categories"),
             "point_weights": db.kv_get("point_weights", {})}
+
+
+SLOT_CHOICES = ["PG", "SG", "G", "SF", "PF", "F", "C", "Util", "BN", "IL", "IL+"]
+
+
+def _owner(pid):
+    with db.cursor() as c:
+        r = c.execute("SELECT r.team_key, t.name FROM rosters r JOIN fantasy_teams t USING(team_key) "
+                      "WHERE r.nba_id=?", (pid,)).fetchone()
+    return (r["team_key"], r["name"]) if r else (None, None)
+
+
+def _touch(key):
+    updated = db.kv_get("manual_updated", {})
+    updated[key] = db.now_iso()
+    db.kv_set("manual_updated", updated)
+
+
+def edit_roster(key: str, add: int | None = None, drop: int | None = None, slot: str = "BN", ctx=None) -> dict:
+    """Add and/or drop one player on a team. On your own team, an add+drop pair is logged
+    to the move ledger like any roster change, so it gets scored."""
+    with db.cursor() as c:
+        team = c.execute("SELECT is_mine FROM fantasy_teams WHERE team_key=?", (key,)).fetchone()
+        if not team:
+            raise ValueError("Unknown team")
+        before = [r["nba_id"] for r in c.execute("SELECT nba_id FROM rosters WHERE team_key=?", (key,))]
+    if add is not None:
+        own_key, own_name = _owner(add)
+        if own_key == key:
+            raise ValueError("Already on this team")
+        if own_key:
+            raise ValueError(f"Already on {own_name}: drop him there first")
+    if drop is not None and drop not in before:
+        raise ValueError("That player isn't on this team")
+    if slot not in SLOT_CHOICES:
+        raise ValueError(f"Slot must be one of {', '.join(SLOT_CHOICES)}")
+    with db.cursor() as c:
+        if drop is not None:
+            c.execute("DELETE FROM rosters WHERE team_key=? AND nba_id=?", (key, drop))
+        if add is not None:
+            c.execute("INSERT INTO rosters VALUES (?,?,?)", (key, add, slot))
+    _touch(key)
+    if team["is_mine"]:
+        after = [p for p in before if p != drop] + ([add] if add is not None else [])
+        if ctx is not None and add is not None and drop is not None:
+            learning.record_roster_change(ctx, before, after)
+        db.kv_set("my_roster_last", after)
+    return {"ok": True}
+
+
+def set_slot(key: str, pid: int, slot: str):
+    if slot not in SLOT_CHOICES:
+        raise ValueError(f"Slot must be one of {', '.join(SLOT_CHOICES)}")
+    with db.cursor() as c:
+        n = c.execute("UPDATE rosters SET slot=? WHERE team_key=? AND nba_id=?", (slot, key, pid)).rowcount
+    if not n:
+        raise ValueError("That player isn't on this team")
+    _touch(key)
+
+
+def roster(key: str) -> list:
+    with db.cursor() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT r.nba_id, r.slot, p.name, p.team FROM rosters r JOIN players p USING(nba_id) "
+            "WHERE r.team_key=? ORDER BY CASE r.slot WHEN 'PG' THEN 1 WHEN 'SG' THEN 2 WHEN 'G' THEN 3 "
+            "WHEN 'SF' THEN 4 WHEN 'PF' THEN 5 WHEN 'F' THEN 6 WHEN 'C' THEN 7 WHEN 'Util' THEN 8 "
+            "WHEN 'BN' THEN 9 ELSE 10 END, p.name", (key,))]

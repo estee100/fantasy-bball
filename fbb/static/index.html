@@ -34,6 +34,7 @@
     <button role="tab" data-tab="roster">Rosters</button>
     <button role="tab" data-tab="league">League</button>
     <button role="tab" data-tab="news">News <span class="count" id="news-count"></span></button>
+    <button role="tab" data-tab="watch">Watchlist</button>
     <button role="tab" data-tab="trade">Trade lab</button>
     <button role="tab" data-tab="learning">Model &amp; learning</button>
     <button role="tab" data-tab="setup">League setup</button>
@@ -120,6 +121,18 @@
     </div>
   </section>
 
+  <!-- ======================================================= WATCHLIST -->
+  <section data-panel="watch" class="hidden">
+    <div class="card">
+      <div class="hd"><h2>Watch a player</h2><span class="sub">see how he does vs the player you'd have dropped for him</span></div>
+      <div class="bd" style="display:grid;gap:8px">
+        <div class="picker" id="watch-picker"></div>
+        <div class="small muted">Compared against your weakest player by default; change it on the card. Results over a week or two are mostly noise: the projection change is the better guide for whether to act.</div>
+      </div>
+    </div>
+    <div class="watch-grid section-gap" id="watch-list"></div>
+  </section>
+
   <!-- ======================================================= TRADE -->
   <section data-panel="trade" class="hidden">
     <div class="grid cols-2-even">
@@ -182,6 +195,11 @@
         <div class="hd"><h2>League settings</h2></div>
         <div class="bd" id="settings-form"></div>
       </div>
+    </div>
+    <div class="card section-gap">
+      <div class="hd"><h2>Edit a roster</h2><span class="sub">for single adds/drops and lineup slots without re-pasting</span>
+        <div class="right"><select id="edit-team" class="btn"></select></div></div>
+      <div class="bd" id="roster-editor"></div>
     </div>
     <div class="card section-gap">
       <div class="hd"><h2>Teams</h2><span class="sub">pick who you're playing this week · re-paste a team whenever its roster changes</span></div>

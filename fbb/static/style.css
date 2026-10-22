@@ -265,3 +265,18 @@ textarea { width: 100%; min-height: 140px; border: 1px solid var(--border); bord
 
 section[data-panel="setup"] { max-width: 1320px; margin: 0 auto; padding: 20px; }
 @media (max-width: 520px) { section[data-panel="setup"] { padding: 16px; } }
+
+/* ------------------------------------------------------------------ watchlist + roster editor */
+.watch-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+@media (max-width: 520px) { .watch-grid { grid-template-columns: 1fr; } }
+.watch-card { padding: 14px 16px; display: grid; gap: 10px; }
+.watch-card .top { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.watch-card .diff { font-size: 26px; font-weight: 650; letter-spacing: -0.02em; }
+.watch-card .vs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; }
+.watch-card .vs div { background: var(--surface-2); border-radius: 6px; padding: 8px; }
+.watch-card .vs b { display: block; font-size: 15px; color: var(--ink); }
+.spark { display: flex; align-items: flex-end; gap: 2px; height: 34px; }
+.spark span { flex: 1; border-radius: 2px 2px 0 0; min-height: 2px; }
+.editor-row { display: grid; grid-template-columns: 90px 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--grid); }
+.editor-row:last-child { border-bottom: 0; }
+.editor-row select, select.btn { padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; }

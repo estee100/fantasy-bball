@@ -45,6 +45,8 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("#report-btn").addEventListener("click", submitReport);
   $("#team-btn").addEventListener("click", importTeam);
+  initWatchPicker();
+  $("#edit-team").addEventListener("change", () => loadEditor($("#edit-team").value));
   initTrade();
   initTips();
   load();
@@ -76,6 +78,7 @@ function showTab(tab) {
   if (tab === "news") loadNews();
   if (tab === "learning") loadLearning();
   if (tab === "setup") loadSetup();
+  if (tab === "watch") loadWatch();
 }
 
 async function load() {
@@ -271,14 +274,23 @@ function renderMoves() {
         <span style="margin-left:auto"></span>
         <button class="btn" data-act="executed" data-i="${i}">${ICON.check.replace("<svg", '<svg style="width:14px;height:14px"')} I made this move</button>
         <button class="btn ghost" data-act="dismissed" data-i="${i}">Dismiss</button>
+        <button class="btn ghost" data-watch="${m.add}" data-vs="${m.drop}" title="Track how he does vs ${esc(m.drop_name)} without making the move">☆ Watch</button>
       </div>
     </div>`).join("");
   $$("#moves [data-act]").forEach((b) => b.addEventListener("click", async () => {
     const m = moves[+b.dataset.i];
     const found = await api(`/api/moves/lookup?add=${m.add}&drop=${m.drop}`);
     if (!found.id) { b.textContent = "Not in ledger yet (only top 3 are logged)"; return; }
-    await api(`/api/moves/${found.id}`, { method: "POST", body: JSON.stringify({ status: b.dataset.act }) });
-    b.closest(".actions").innerHTML = `<span class="small muted">${b.dataset.act === "executed" ? "Logged as made: it'll be scored against real box scores." : "Dismissed: still scored as a counterfactual, so the model learns either way."}</span>`;
+    const res = await api(`/api/moves/${found.id}`, { method: "POST", body: JSON.stringify({ status: b.dataset.act }) }).catch((e) => ({ error: e.message }));
+    b.closest(".actions").innerHTML = `<span class="small muted">${res.error ? "Couldn't apply: " + esc(res.error)
+      : b.dataset.act === "executed" ? (res.roster_updated ? "Roster updated and logged; it'll be scored against real box scores. Re-running the model…" : "Logged as made: it'll be scored against real box scores.")
+      : "Dismissed: still scored as a counterfactual, so the model learns either way."}</span>`;
+    if (res.roster_updated) afterManualChange();
+  }));
+  $$("#moves [data-watch]").forEach((b) => b.addEventListener("click", async () => {
+    await watchPlayer(+b.dataset.watch, +b.dataset.vs);
+    b.textContent = "★ Watching";
+    b.disabled = true;
   }));
   bindPlayerLinks(el);
 }
@@ -453,7 +465,7 @@ async function openPlayer(pid) {
   const zmax = Math.max(2, ...Object.values(z).map(Math.abs));
   $(".drawer", root).innerHTML = `
     <button class="btn ghost close" aria-label="Close">${ICON.x.replace("<svg", '<svg style="width:16px;height:16px"')}</button>
-    <h3>${esc(p.name)}</h3>
+    <h3>${esc(p.name)} <button class="btn ghost small" id="drawer-watch" style="margin-left:8px;vertical-align:middle">☆ Watch</button></h3>
     <div class="ink2" style="margin-top:4px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">${esc(p.team || "")}${p.positions ? " · " + esc(p.positions) : ""} ${injuryStatus(p.injury)}
       <span class="muted small">${p.n_games} games in sample · ${p.games_left} left this week</span></div>
     ${p.injury?.comment ? `<div class="note" style="margin-top:10px">${esc(p.injury.comment)}</div>` : ""}
@@ -476,6 +488,11 @@ async function openPlayer(pid) {
     <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Opp</th><th class="r">MIN</th><th class="r">PTS</th><th class="r">REB</th><th class="r">AST</th><th class="r">STL</th><th class="r">BLK</th><th class="r">3PM</th><th class="r">TO</th><th class="r">FG</th></tr></thead>
       <tbody>${(p.game_log || []).map((g) => `<tr><td class="num">${esc(g.date)}</td><td class="muted">${esc(g.matchup.slice(-6))}</td>${["min", "pts", "reb", "ast", "stl", "blk", "fg3m", "tov"].map((k) => `<td class="r num">${Math.round(g[k])}</td>`).join("")}<td class="r num">${esc(g.fg)}</td></tr>`).join("")}</tbody></table></div>`;
   $(".drawer .close", root).addEventListener("click", close);
+  $("#drawer-watch").addEventListener("click", async (e) => {
+    const r = await watchPlayer(pid);
+    e.target.textContent = r.error ? r.error : "★ Watching";
+    e.target.disabled = true;
+  });
   (p.skills || []).filter((s) => s.dates).forEach((s, i) => { charts["p_sk" + i] = skillChart($("#sk" + i), s); });
   const s0 = (p.skills || []).find((s) => s.dates);
   if (s0) charts.p_mins = minutesChart($("#mins"), s0);
@@ -746,6 +763,10 @@ function renderSetup() {
     loadSetup(); afterManualChange();
   }));
   if (!T.some((t) => t.is_mine)) $("#team-mine").checked = true;
+  const sel = $("#edit-team"), current = sel.value;
+  sel.innerHTML = T.map((t) => `<option value="${esc(t.team_key)}">${esc(t.name)}${t.is_mine ? " (you)" : ""}</option>`).join("");
+  sel.value = T.some((t) => t.team_key === current) ? current : (T.find((t) => t.is_mine)?.team_key || T[0]?.team_key || "");
+  loadEditor(sel.value);
 }
 
 async function importTeam() {
@@ -802,4 +823,129 @@ function renderMarginHist(m, el) {
       <div class="b" style="height:${(c / max) * 80}%"></div><span>${i % 5 === 0 ? Math.round(mid) : ""}</span></div>`;
   }).join("");
   $("#hist-note").innerHTML = `<span class="legend"><span><i style="background:var(--me)"></i>You win (${pct(m.win_prob)})</span><span><i style="background:var(--axis)"></i>You lose</span></span>`;
+}
+
+/* ------------------------------------------------------------------ watchlist */
+async function watchPlayer(pid, vs) {
+  const r = await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nba_id: pid, compare_id: vs ?? null }) });
+  const d = await r.json();
+  return r.ok ? d : { error: d.detail || "failed" };
+}
+
+function initWatchPicker() {
+  const el = $("#watch-picker");
+  el.innerHTML = `<input placeholder="Search any player to watch…" aria-label="Search players to watch"><div class="opts card hidden"></div>`;
+  const input = $("input", el), opts = $(".opts", el);
+  let t;
+  input.addEventListener("input", () => {
+    clearTimeout(t);
+    t = setTimeout(async () => {
+      if (input.value.trim().length < 2) { opts.classList.add("hidden"); return; }
+      const hits = await api(`/api/players/search?q=${encodeURIComponent(input.value.trim())}&scope=others`);
+      opts.innerHTML = hits.map((h) => `<div class="opt" data-id="${h.nba_id}"><span><b>${esc(h.name)}</b> <span class="pteam">${esc(h.team || "")}</span></span><span class="muted small">${esc(h.owner)}</span></div>`).join("") || `<div class="opt muted">No match</div>`;
+      opts.classList.remove("hidden");
+      $$(".opt[data-id]", opts).forEach((o) => o.addEventListener("click", async () => {
+        input.value = ""; opts.classList.add("hidden");
+        const r = await watchPlayer(+o.dataset.id);
+        if (r.error) alert(r.error);
+        loadWatch();
+      }));
+    }, 200);
+  });
+  input.addEventListener("blur", () => setTimeout(() => opts.classList.add("hidden"), 200));
+}
+
+async function loadWatch() {
+  const d = await api("/api/watchlist");
+  const el = $("#watch-list");
+  if (!d.items.length) {
+    el.innerHTML = `<div class="card"><div class="empty">Nothing watched yet. Search above, or press ☆ Watch on a recommended move or in a player's detail view.</div></div>`;
+    return;
+  }
+  const unit = d.unit === "fantasy pts" ? "pts" : "value";
+  el.innerHTML = d.items.map((w) => {
+    const up = w.diff >= 0;
+    const drift = w.proj_then != null ? w.proj_now - w.proj_then : null;
+    const all = [...w.log, ...w.compare_log].map((x) => Math.abs(x.fp));
+    const max = Math.max(1, ...all);
+    const spark = (log, color) => `<div class="spark">${log.map((x) => `<span title="${esc(x.d)}: ${fmt(x.fp, 1)}" style="height:${Math.max(4, Math.abs(x.fp) / max * 100)}%;background:${color};opacity:${x.fp < 0 ? .45 : 1}"></span>`).join("") || `<span class="muted small" style="background:none">no games yet</span>`}</div>`;
+    return `<div class="card watch-card">
+      <div class="top"><a href="#" class="pname" data-pid="${w.nba_id}">${esc(w.name)}</a><span class="pteam">${esc(w.team || "no NBA team")}</span>
+        <span class="chip ${w.status === "free agent" ? "" : "mine"}">${esc(w.status)}</span>${w.injury ? `<span class="status st-warning"><span class="dot"></span>${esc(w.injury)}</span>` : ""}
+        <button class="btn ghost small" style="margin-left:auto" data-unwatch="${w.id}" title="Stop watching">✕</button></div>
+      <div><div class="diff num ${w.games || w.compare_games ? (up ? "delta-up" : "delta-down") : "muted"}">${w.games || w.compare_games ? signed(w.diff, 1) + " " + unit : "–"}</div>
+        <div class="small muted">since ${esc(shortDate(w.since))}, if you'd swapped him in for
+          <select data-compare="${w.id}">${d.my_roster.map((p) => `<option value="${p.nba_id}" ${p.nba_id === w.compare_id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></div></div>
+      <div class="vs">
+        <div>${esc(w.name)}<b class="num">${fmt(w.points, 1)}</b>${w.games} g${w.per_game != null ? ` · ${fmt(w.per_game, 1)}/g` : ""}${spark(w.log, "var(--me)")}</div>
+        <div>${esc(w.compare_name || "—")}<b class="num">${fmt(w.compare_points, 1)}</b>${w.compare_games} g${w.compare_per_game != null ? ` · ${fmt(w.compare_per_game, 1)}/g` : ""}${spark(w.compare_log, "var(--opp)")}</div>
+      </div>
+      <div class="small ink2">Projection: ${fmt(w.proj_then, 1)} → <b>${fmt(w.proj_now, 1)}</b> ${unit}/g
+        ${drift != null && Math.abs(drift) >= 0.5 ? `<span class="${drift > 0 ? "delta-up" : "delta-down"}">(${signed(drift, 1)})</span>` : "(unchanged)"}
+        · ${esc(w.compare_name || "")} now ${fmt(w.compare_proj_now, 1)}</div>
+    </div>`;
+  }).join("");
+  $$("#watch-list [data-unwatch]").forEach((b) => b.addEventListener("click", async () => {
+    await fetch(`/api/watchlist/${b.dataset.unwatch}`, { method: "DELETE" }); loadWatch();
+  }));
+  $$("#watch-list [data-compare]").forEach((s) => s.addEventListener("change", async () => {
+    await api(`/api/watchlist/${s.dataset.compare}`, { method: "POST", body: JSON.stringify({ compare_id: +s.value }) }); loadWatch();
+  }));
+  bindPlayerLinks(el);
+}
+
+/* ------------------------------------------------------------------ roster editor (manual mode) */
+async function loadEditor(key) {
+  const el = $("#roster-editor");
+  if (!key) { el.innerHTML = `<div class="empty">No teams yet.</div>`; return; }
+  const d = await api(`/api/manual/roster/${encodeURIComponent(key)}`);
+  el.innerHTML = `<div class="picker" id="editor-add" style="margin-bottom:10px"></div>
+    ${d.players.map((p) => `<div class="editor-row">
+      <select data-slot="${p.nba_id}">${d.slots.map((s) => `<option ${s === p.slot ? "selected" : ""}>${s}</option>`).join("")}</select>
+      <span><a href="#" class="pname" data-pid="${p.nba_id}">${esc(p.name)}</a> <span class="pteam">${esc(p.team || "no NBA team")}</span></span>
+      <button class="btn ghost small" data-drop="${p.nba_id}">Drop</button></div>`).join("")}
+    <div class="small muted" style="margin-top:8px">${d.players.length} players. On your team, a drop followed by an add is logged as one move and scored like any other.</div>`;
+  const pk = $("#editor-add");
+  pk.innerHTML = `<input placeholder="Add a player to this team…"><div class="opts card hidden"></div>`;
+  const input = $("input", pk), opts = $(".opts", pk);
+  let t;
+  input.addEventListener("input", () => {
+    clearTimeout(t);
+    t = setTimeout(async () => {
+      if (input.value.trim().length < 2) { opts.classList.add("hidden"); return; }
+      const hits = await api(`/api/players/search?q=${encodeURIComponent(input.value.trim())}`);
+      opts.innerHTML = hits.map((h) => `<div class="opt" data-id="${h.nba_id}"><span><b>${esc(h.name)}</b> <span class="pteam">${esc(h.team || "")}</span></span><span class="muted small">${esc(h.owner)}</span></div>`).join("");
+      opts.classList.remove("hidden");
+      $$(".opt[data-id]", opts).forEach((o) => o.addEventListener("click", () => editRoster(key, { add: +o.dataset.id })));
+    }, 200);
+  });
+  input.addEventListener("blur", () => setTimeout(() => opts.classList.add("hidden"), 200));
+  $$("[data-drop]", el).forEach((b) => b.addEventListener("click", () => {
+    if (confirm("Drop this player?")) editRoster(key, { drop: +b.dataset.drop });
+  }));
+  $$("[data-slot]", el).forEach((s) => s.addEventListener("change", async () => {
+    await api("/api/manual/slot", { method: "POST", body: JSON.stringify({ team_key: key, nba_id: +s.dataset.slot, slot: s.value }) });
+    afterManualChange();
+  }));
+  bindPlayerLinks(el);
+}
+
+let pendingDrop = null;
+async function editRoster(key, change) {
+  // A drop and the next add on your own team are sent together, so they're logged as one move.
+  const mine = setupData?.teams.find((t) => t.team_key === key)?.is_mine;
+  if (mine && change.drop && !change.add) {
+    pendingDrop = change.drop;
+  }
+  const body = { team_key: key, ...change };
+  if (mine && change.add && pendingDrop) { body.drop = pendingDrop; pendingDrop = null; }
+  if (mine && change.drop && !change.add) {
+    const pick = confirm("Drop now? Press Cancel to drop him together with your next add instead (logged as one move, so the model can score it).");
+    if (!pick) { loadEditor(key); return; }
+    pendingDrop = null;
+  }
+  const r = await fetch("/api/manual/roster", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) { const d = await r.json(); alert(d.detail || "Edit failed"); return; }
+  loadEditor(key); loadSetup(); afterManualChange();
 }

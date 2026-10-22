@@ -229,8 +229,23 @@ class StatusIn(BaseModel):
 def move_status(move_id: int, s: StatusIn):
     if s.status not in ("executed", "dismissed", "suggested"):
         raise HTTPException(400, "bad status")
+    applied = False
+    if s.status == "executed" and db.kv_get("league_source") == "manual":
+        # manual mode has no Yahoo sync to notice the change: apply it to the pasted roster
+        from . import manual
+        ctx = pipeline.context()
+        with db.cursor() as c:
+            mv = c.execute("SELECT add_id, drop_id FROM moves WHERE id=?", (move_id,)).fetchone()
+        if mv and ctx.my_key:
+            try:
+                manual.edit_roster(ctx.my_key, add=mv["add_id"], drop=mv["drop_id"], slot="BN")
+                applied = True
+            except ValueError as e:
+                raise HTTPException(400, str(e))
     learning.set_move_status(move_id, s.status)
-    return {"ok": True}
+    if applied:
+        _manual_changed()
+    return {"ok": True, "roster_updated": applied}
 
 
 @app.get("/api/moves/lookup")
@@ -341,4 +356,91 @@ def manual_opponent(o: OpponentIn):
     from . import manual
     manual.set_opponent(o.team_key)
     _manual_changed()
+    return {"ok": True}
+
+
+
+class RosterEditIn(BaseModel):
+    team_key: str
+    add: int | None = None
+    drop: int | None = None
+    slot: str = "BN"
+
+
+class SlotIn(BaseModel):
+    team_key: str
+    nba_id: int
+    slot: str
+
+
+@app.get("/api/manual/roster/{key}")
+def manual_roster(key: str):
+    from . import manual
+    return _json({"team_key": key, "players": manual.roster(key), "slots": manual.SLOT_CHOICES})
+
+
+@app.post("/api/manual/roster")
+def manual_roster_edit(e: RosterEditIn):
+    from . import manual
+    try:
+        manual.edit_roster(e.team_key, e.add, e.drop, e.slot, pipeline.context())
+    except ValueError as err:
+        raise HTTPException(400, str(err))
+    _manual_changed()
+    return {"ok": True}
+
+
+@app.post("/api/manual/slot")
+def manual_slot(e: SlotIn):
+    from . import manual
+    try:
+        manual.set_slot(e.team_key, e.nba_id, e.slot)
+    except ValueError as err:
+        raise HTTPException(400, str(err))
+    _manual_changed()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- watchlist
+
+class WatchIn(BaseModel):
+    nba_id: int
+    compare_id: int | None = None
+    note: str = ""
+
+
+class CompareIn(BaseModel):
+    compare_id: int
+
+
+@app.get("/api/watchlist")
+def watch_get():
+    from . import watchlist
+    ctx = pipeline.context()
+    mine = [{"nba_id": int(p), "name": ctx.name(p)} for p in
+            sorted(ctx.rosters.get(ctx.my_key, []), key=lambda p: ctx.values["value"].get(p, -99))]
+    return _json({"items": watchlist.report(ctx), "my_roster": mine,
+                  "unit": "fantasy pts" if model.scoring_mode() == "points" else "value"})
+
+
+@app.post("/api/watchlist")
+def watch_add(w: WatchIn):
+    from . import watchlist
+    try:
+        return watchlist.add(pipeline.context(), w.nba_id, w.compare_id, w.note)
+    except ValueError as err:
+        raise HTTPException(400, str(err))
+
+
+@app.post("/api/watchlist/{wid}")
+def watch_compare(wid: int, c: CompareIn):
+    from . import watchlist
+    watchlist.set_compare(pipeline.context(), wid, c.compare_id)
+    return {"ok": True}
+
+
+@app.delete("/api/watchlist/{wid}")
+def watch_remove(wid: int):
+    from . import watchlist
+    watchlist.remove(wid)
     return {"ok": True}
