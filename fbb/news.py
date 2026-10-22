@@ -29,7 +29,15 @@ RSS_FEEDS = {
     "Yahoo": "https://sports.yahoo.com/nba/rss.xml",
     "CBS": "https://www.cbssports.com/rss/headlines/nba/",
     "ESPN": "https://www.espn.com/espn/rss/nba/news",
+    "RealGM": "https://basketball.realgm.com/rss/wiretap/0/0.xml",
+    "HoopsRumors": "https://www.hoopsrumors.com/feed",
+    "Reddit": "https://www.reddit.com/r/fantasybball/new/.rss",
+    "Google News": "https://news.google.com/rss/search?q=NBA+injury+OR+%22out+for%22+OR+%22questionable%22"
+                   "+OR+%22starting+lineup%22+when:2d&hl=en-US&gl=US&ceid=US:en",
 }
+# broad feeds: keep only items that name a player (cuts noise and Claude cost)
+PLAYER_ONLY = {"RealGM", "HoopsRumors", "Reddit", "Google News"}
+MAX_AGE_DAYS = 3  # older items carry no fresh information (Google News returns months-old ones)
 ESPN_NEWS = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news?limit=50"
 ESPN_INJURIES = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
 
@@ -77,6 +85,11 @@ def _iso(entry) -> str:
                 return parsedate_to_datetime(entry[key]).astimezone(timezone.utc).isoformat(timespec="seconds")
             except (TypeError, ValueError):
                 pass
+            try:  # Atom feeds (Reddit) use ISO 8601
+                from datetime import datetime
+                return datetime.fromisoformat(entry[key].replace("Z", "+00:00")).astimezone(timezone.utc).isoformat(timespec="seconds")
+            except ValueError:
+                pass
     return db.now_iso()
 
 
@@ -100,10 +113,16 @@ def fetch_news() -> int:
     except (requests.RequestException, ValueError) as e:
         log.warning("espn news failed: %s", e)
     new = 0
+    from datetime import datetime, timedelta, timezone
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)).isoformat()
     with db.cursor() as c:
         for source, title, summary, url, pub in items:
+            if pub and pub < cutoff:
+                continue
             nid = hashlib.sha1((url or title).encode()).hexdigest()[:16]
             pids = idx.find_in_text(f"{title} {summary}")
+            if source in PLAYER_ONLY and not pids:
+                continue
             cur = c.execute("""INSERT OR IGNORE INTO news(id, source, title, summary, url, published, fetched, player_ids)
                                VALUES (?,?,?,?,?,?,?,?)""",
                             (nid, source, title, summary[:2000], url, pub, db.now_iso(), json.dumps(pids)))
