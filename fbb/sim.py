@@ -297,11 +297,90 @@ def simulate_team(ctx: Context, pids, dates, n_sims=2000, seed=7, wtd=None) -> n
             masks.append(rng.random(n_sims) < sched[pid][d])
             draws.append(lines[rng.choice(len(lines), n_sims, p=probs)] * form[pid])
         masks = np.stack(masks, 1)
-        # You can't start more players than active slots: the best available ones play.
-        taken = masks & (np.cumsum(masks, 1) <= ctx.active_slots)
+        # Real lineup slots (PG/SG/G/SF/PF/F/C/C/Util/Util): for each pattern of who's
+        # available in a simulated day, fill the slots best-first with position eligibility.
+        taken = fill_patterns(ctx, playing, masks)
         for k in range(len(playing)):
             totals += draws[k] * taken[:, k:k + 1]
     return totals
+
+
+def _slot_setup(ctx):
+    if "_slots_setup" not in ctx._pools:
+        from . import lineup
+        ctx._pools["_slots_setup"] = (lineup.slot_list(), {}, {})
+    return ctx._pools["_slots_setup"]
+
+
+def player_slot_mask(ctx, pid) -> int:
+    from . import lineup
+    slots, pmask, _ = _slot_setup(ctx)
+    if pid not in pmask:
+        mode = ctx.params.get("position_mode", "widened")
+        if mode == "off":  # every player fits every slot: the old 'best 10 each day' rule
+            pmask[pid] = (1 << len(slots)) - 1
+        else:
+            pmask[pid] = lineup.slot_masks(lineup.positions(ctx, pid, mode)[0], slots)
+    return pmask[pid]
+
+
+def started_flags(ctx, avail_players: tuple) -> list:
+    """Who starts, given the players available on a day (in value order). Memoized: within a
+    day most simulated weeks share a pattern, and candidate swaps change one player."""
+    from . import lineup
+    slots, _, memo = _slot_setup(ctx)
+    hit = memo.get(avail_players)
+    if hit is None:
+        hit = lineup.greedy_fill([player_slot_mask(ctx, p) for p in avail_players], len(slots))
+        memo[avail_players] = hit
+    return hit
+
+
+def fill_patterns(ctx, playing: list, masks: np.ndarray) -> np.ndarray:
+    """masks: (n_sims, k) availability, players in value order -> (n_sims, k) started."""
+    k = len(playing)
+    keys = masks.astype(np.int64) @ (np.int64(1) << np.arange(k, dtype=np.int64))
+    uniq, inv = np.unique(keys, return_inverse=True)
+    taken_u = np.zeros((len(uniq), k), dtype=bool)
+    for ui, key in enumerate(uniq):
+        idx = [j for j in range(k) if (int(key) >> j) & 1]
+        flags = started_flags(ctx, tuple(playing[j] for j in idx))
+        for f, j in zip(flags, idx):
+            taken_u[ui, j] = f
+    return taken_u[inv]
+
+
+def expected_starts(ctx, pids, d, avail) -> dict:
+    """Expected games *started* on day d, deterministically (no sampling noise: sampled draws
+    flipped 30 of 414 close backtest matchups). Best player first, each brings his expected
+    availability (e.g. 0.75 of a game) and pours it into open slot capacity he's eligible for,
+    least-needed slots first. Bench players soak up capacity left by starters' expected
+    absences. With positions off this is exactly the old 'best 10 each day' fill.
+    Returns {pid: (expected starts, scheduled-and-considered flag)}."""
+    playing = [p for p in pids if d in team_dates(ctx, ctx.team_of(p))]
+    if not playing:
+        return {}
+    playing.sort(key=lambda p: -ctx.values["value"].get(p, -99))
+    slots, _, _ = _slot_setup(ctx)
+    masks = [player_slot_mask(ctx, p) for p in playing]
+    cap = [1.0] * len(slots)
+    out = {}
+    for j, p in enumerate(playing):
+        need = float(avail[p])
+        got = 0.0
+        open_ = [i for i in range(len(slots)) if (masks[j] >> i) & 1 and cap[i] > 1e-12]
+        considered = bool(open_)
+        # least demanded by the players still to come, then least flexible
+        open_.sort(key=lambda i: (sum((m >> i) & 1 for m in masks[j + 1:]), bin(masks[j]).count("1")))
+        for i in open_:
+            if need <= 1e-12:
+                break
+            take = min(need, cap[i])
+            cap[i] -= take
+            need -= take
+            got += take
+        out[p] = (got, considered)
+    return out
 
 
 def score_totals(ctx: Context, a: np.ndarray, b: np.ndarray):
@@ -443,14 +522,10 @@ def team_dist(ctx: Context, pids, dates, per_week=True) -> dict:
     used = {p: 0.0 for p in pids}
     nvar = {p: 0.0 for p in pids}
     for d in dates:
-        slots = float(ctx.active_slots)
-        for p in ranked:
-            if d in tds[p] and slots > 0:
-                a = avail[p]
-                g = min(a, slots)
-                used[p] += g
-                nvar[p] += a * (1 - a)
-                slots -= g
+        for p, (s, considered) in expected_starts(ctx, pids, d, avail).items():
+            used[p] += s
+            if considered:
+                nvar[p] += avail[p] * (1 - avail[p])  # does he play at all: the games coin flip
     scale = 7 / len(dates) if per_week and dates else 1.0
     form_sd = float(ctx.params.get("weekly_form_sd", 0.0) or 0.0)
     cats = model.league_categories() if model.scoring_mode() == "categories" else ["_points"]
@@ -494,15 +569,10 @@ def used_games_per_week(ctx: Context, pids) -> dict:
     dates = lookahead_dates(ctx)
     tds = {p: team_dates(ctx, ctx.team_of(p)) for p in pids}
     avail = {p: model.ros_availability(p, ctx.injuries, ctx.events) for p in pids}
-    ranked = sorted(pids, key=lambda p: -ctx.values["value"].get(p, -99))
     used = {p: 0.0 for p in pids}
     for d in dates:
-        slots = float(ctx.active_slots)
-        for p in ranked:
-            if d in tds[p] and slots > 0:
-                g = min(avail[p], slots)
-                used[p] += g
-                slots -= g
+        for p, (s, _) in expected_starts(ctx, pids, d, avail).items():
+            used[p] += s
     weeks = len(dates) / 7
     return {p: u / weeks for p, u in used.items()}
 

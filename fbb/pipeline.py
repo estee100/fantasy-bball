@@ -185,6 +185,19 @@ def readiness() -> list:
                        "detail": "credentials set, not authorized yet: run `python -m fbb auth` in a terminal"})
     else:
         checks.append({"name": "Yahoo rosters", "ok": False, "detail": "demo league: add Yahoo credentials to .env"})
+    if src in ("manual", "yahoo"):
+        # a roster over the limit usually means an IL move the app hasn't been told about,
+        # and it inflates every projection for that team
+        with db.cursor() as c:
+            mine = c.execute("SELECT team_key FROM fantasy_teams WHERE is_mine=1").fetchone()
+            if mine:
+                n = c.execute("SELECT count(*) FROM rosters WHERE team_key=? AND coalesce(slot,'') NOT IN ('IL','IL+','NA')",
+                              (mine[0],)).fetchone()[0]
+                limit = db.kv_get("roster_size", 13)
+                if n > limit:
+                    checks.append({"name": "Roster size", "ok": False,
+                                   "detail": f"your team has {n} active players, the league allows {limit}: set an IL slot "
+                                             f"or record the drop in League setup (projections are inflated until then)"})
     if src == "manual":
         from . import manual
         info = manual.summary()

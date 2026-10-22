@@ -40,9 +40,15 @@ def parse_positions(text: str | None) -> set:
     return out
 
 
-def positions(ctx, pid) -> tuple[set, str]:
+# ESPN lists one position; Yahoo usually grants neighbours too (a "C" is often PF,C).
+# Widening ESPN's label keeps players without Yahoo data from being artificially rigid.
+ESPN_WIDEN = {"PG": {"PG", "SG"}, "SG": {"PG", "SG", "SF"}, "SF": {"SG", "SF", "PF"},
+              "PF": {"SF", "PF", "C"}, "C": {"PF", "C"}}
+
+
+def positions(ctx, pid, mode="widened") -> tuple[set, str]:
     """(eligible base positions, source). Yahoo/paste eligibility first, ESPN's coarse
-    position as a fallback; unknown players can only fill Util."""
+    position as a fallback (widened unless mode='strict'); unknown players fill Util only."""
     row = ctx.players.loc[pid] if pid in ctx.players.index else None
     if row is not None:
         p = parse_positions(row.get("positions"))
@@ -50,6 +56,8 @@ def positions(ctx, pid) -> tuple[set, str]:
             return p, "yahoo"
         p = parse_positions(row.get("espn_pos"))
         if p:
+            if mode != "strict":
+                p = set().union(*(ESPN_WIDEN.get(x, {x}) for x in p))
             return p, "espn"
     return {"?"}, "unknown"
 
@@ -183,3 +191,66 @@ def apply_today(ctx, team_key=None) -> dict:
             c.execute("UPDATE rosters SET slot=? WHERE team_key=? AND nba_id=?",
                       (started.get(pid, "BN"), team_key, pid))
     return {"ok": True, "started": len(started)}
+
+
+# ---------------------------------------------------------------- fast fill for the simulator
+ANY = {"PG", "SG", "SF", "PF", "C"}
+
+
+def slot_masks(pos: set, slots: list) -> int:
+    """Bitmask of the slots a player can fill. Unknown positions count as anything here:
+    the simulator shouldn't punish a team for missing data (the lineup card flags it)."""
+    pos = ANY if (not pos or pos == {"?"}) else pos
+    m = 0
+    for i, s in enumerate(slots):
+        if pos & SLOT_ELIG[s]:
+            m |= 1 << i
+    return m
+
+
+def greedy_fill(masks: list, n_slots: int) -> list:
+    """Players arrive best-first (masks in value order). Each takes, among open slots he's
+    eligible for, the one the players still to come are least able to use. Returns started
+    flags. Used inside the simulator (thousands of calls); see check_greedy() for how often
+    it matches the exact solver."""
+    free = (1 << n_slots) - 1
+    started = [False] * len(masks)
+    for j, m in enumerate(masks):
+        cand = m & free
+        if not cand:
+            continue
+        best, best_d = None, None
+        i = 0
+        while cand >> i:
+            if (cand >> i) & 1:
+                d = 0
+                for mm in masks[j + 1:]:
+                    d += (mm >> i) & 1
+                if best_d is None or d < best_d:
+                    best, best_d = i, d
+            i += 1
+        free &= ~(1 << best)
+        started[j] = True
+    return started
+
+
+def check_greedy(trials=2000, seed=0) -> dict:
+    """How often the fast fill equals the exact optimum, on random rosters drawn like real ones."""
+    import random
+    rng = random.Random(seed)
+    slots = DEFAULT_SLOTS
+    shapes = [{"PG"}, {"PG", "SG"}, {"SG"}, {"SG", "SF"}, {"SF"}, {"SF", "PF"}, {"PF"}, {"PF", "C"}, {"C"}]
+    same, losses = 0, []
+    for _ in range(trials):
+        k = rng.randint(6, 13)
+        cands = sorted([(j, rng.choice(shapes), rng.uniform(15, 55)) for j in range(k)], key=lambda c: -c[2])
+        _, exact = solve(cands, slots)
+        flags = greedy_fill([slot_masks(c[1], slots) for c in cands], len(slots))
+        fast = sum(c[2] for c, f in zip(cands, flags) if f)
+        if abs(fast - exact) < 1e-9:
+            same += 1
+        else:
+            losses.append(exact - fast)
+    return {"trials": trials, "optimal_share": same / trials,
+            "avg_loss_when_not": (sum(losses) / len(losses)) if losses else 0.0,
+            "max_loss": max(losses) if losses else 0.0}

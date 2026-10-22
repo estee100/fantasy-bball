@@ -53,6 +53,9 @@ def _context(logs_all, ws, params, num_teams, roster_size, active_slots):
     last = hist.sort_values("game_date").groupby("nba_id").tail(1).set_index("nba_id")
     players = pd.DataFrame({"name": last["player_name"] if "player_name" in last else last.index.astype(str),
                             "team": last["team"]})
+    with db.cursor() as c:
+        pos = pd.read_sql_query("SELECT nba_id, positions, espn_pos FROM players", c).set_index("nba_id")
+    players = players.join(pos, how="left")
     we = ws + pd.Timedelta(days=6)
     ctx = sim.Context(logs=hist, proj=proj, values=values, params=params, injuries={}, events={},
                       b2b=model.back_to_back_sit_rates(hist), players=players, rosters={}, teams={},

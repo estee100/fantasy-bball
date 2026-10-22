@@ -65,10 +65,13 @@ The Model & learning tab shows all of it.
 
 ## Limits worth knowing
 
-- Positional eligibility isn't modeled in the daily lineup cap or start/sit suggestions.
+- Lineups use real slots (PG/SG/G/SF/PF/F/C/C/Util/Util). The lineup card solves each day
+  exactly; the simulator uses a fast fill that matches the exact answer ~98% of the time
+  (misses cost about one bench decision). Players with unknown positions count as any
+  position in the simulator and Util-only on the lineup card (flagged there).
 - Weekly add limits and waiver priority / FAAB aren't modeled.
-- Returning players who missed most of last season (e.g. long injuries) are projected from thin
-  data and shrunk hard toward an average rotation player until they play.
+- Players with an injury-shortened last season fall back to the season before; players with
+  no NBA history at all (rookies before their first games) lean on a generic rotation prior.
 - News feeds are free RSS/APIs: occasionally late compared to paid services.
 
 ## Layout
