@@ -51,11 +51,14 @@ def ingest_logs(seasons=None) -> int:
         total += len(df)
         latest = df.sort_values("game_date").groupby("nba_id").tail(1)
         for r in latest.itertuples():
-            names[r.nba_id] = (r.player_name, r.team)
+            names[r.nba_id] = (r.player_name, r.team, season == config.SEASON)
     with db.cursor() as c:
-        for pid, (name, team) in names.items():
-            c.execute("""INSERT INTO players(nba_id, name, norm_name, team, updated) VALUES (?,?,?,?,?)
-                         ON CONFLICT(nba_id) DO UPDATE SET team=excluded.team, updated=excluded.updated""",
+        for pid, (name, team, current) in names.items():
+            # only this season's box scores may move a player to a new team; older seasons
+            # just make sure the player exists
+            on_conflict = "DO UPDATE SET team=excluded.team, updated=excluded.updated" if current else "DO NOTHING"
+            c.execute(f"""INSERT INTO players(nba_id, name, norm_name, team, updated) VALUES (?,?,?,?,?)
+                          ON CONFLICT(nba_id) {on_conflict}""",
                       (pid, name, norm_name(name), team, db.now_iso()))
     log.info("ingested %d game log rows", total)
     return total

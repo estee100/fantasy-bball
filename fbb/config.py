@@ -18,6 +18,15 @@ ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 SEASON = os.getenv("NBA_SEASON", "2026-27")
 PRIOR_SEASON = os.getenv("NBA_PRIOR_SEASON", "2025-26")
 
+
+def season_before(season: str) -> str:
+    start = int(season[:4]) - 1
+    return f"{start}-{str(start + 1)[-2:]}"
+
+
+# Only used to learn how much last season should count in October (backtest on PRIOR_SEASON's start)
+PRIOR2_SEASON = season_before(PRIOR_SEASON)
+
 CLAUDE_MODEL = "claude-opus-5-5"
 
 
@@ -63,8 +72,11 @@ DEFAULT_ACTIVE_SLOTS = 10
 
 # Tunable model parameters; the learning module overwrites these in the DB.
 DEFAULT_PARAMS = {
-    "half_life_games": 15.0,       # recency weighting for per-game projections
-    "prior_season_weight": 0.5,    # how much a prior-season game counts vs a current one
+    "half_life_games": 15.0,       # recency weighting for per-minute production
+    "half_life_minutes": 4.0,      # recency weighting for minutes (changes fast)
+    "prior_season_weight": 0.5,    # sampling pools only: weight of a prior-season box score
+    "prior_strength_games": 15.0,  # last season's per-minute rates count as this many games
+    "prior_strength_minutes": 8.0, # last season's minutes count as this many games
     "future_week_discount": 0.85,  # how much a future week's edge counts vs this week
     "news_multipliers": {},        # event_type -> learned production multiplier
 }

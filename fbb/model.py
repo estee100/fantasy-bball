@@ -46,39 +46,102 @@ def recency_weights(logs: pd.DataFrame, params: dict) -> pd.DataFrame:
     return df
 
 
+PRIOR_SEASON_HALF_LIFE = 30.0  # within last season: mostly a full-season average
+
+
+def _season_estimates(df: pd.DataFrame, cols, hl_rate, hl_min) -> dict:
+    """Recency-weighted minutes, per-minute rates and per-game second moments, one season."""
+    df = df.sort_values(["nba_id", "game_date"], ascending=[True, False])
+    rec = df.groupby("nba_id").cumcount().to_numpy()
+    keep = rec < MAX_GAMES
+    df, rec = df[keep], rec[keep]
+    w, wm = 0.5 ** (rec / hl_rate), 0.5 ** (rec / hl_min)
+    ids, inv = np.unique(df["nba_id"].to_numpy(), return_inverse=True)
+    vals, mins = df[cols].to_numpy(dtype=float), df["min"].to_numpy(dtype=float)
+    ws = lambda x, ww: np.bincount(inv, weights=ww * x, minlength=len(ids))
+    sw, sw2 = np.bincount(inv, weights=w), np.bincount(inv, weights=w ** 2)
+    return {
+        "ids": ids, "n": np.bincount(inv).astype(float), "n_eff": sw ** 2 / sw2,
+        "min": ws(mins, wm) / np.bincount(inv, weights=wm),
+        "rate": np.stack([ws(vals[:, j], w) for j in range(len(cols))], 1) / np.maximum(ws(mins, w), 1e-6)[:, None],
+        "sq": np.stack([ws(vals[:, j] ** 2, w) for j in range(len(cols))], 1) / sw[:, None],
+    }
+
+
+def _align(est, ids, width=None):
+    """Re-index a season estimate onto `ids`; missing players get n=0 (so they carry no weight)."""
+    pos = {p: i for i, p in enumerate(est["ids"])}
+    idx = np.array([pos.get(p, -1) for p in ids])
+    has = idx >= 0
+    out = {}
+    for k, v in est.items():
+        if k == "ids":
+            continue
+        arr = np.zeros((len(ids),) + v.shape[1:])
+        arr[has] = v[idx[has]]
+        out[k] = arr
+    return out
+
+
 def project(logs: pd.DataFrame, params: dict, as_of=None) -> pd.DataFrame:
-    """Per-game projection (mean, std) for every player, using only games before `as_of`."""
+    """Per-game projection (mean, std) for every player, using only games before `as_of`.
+
+    projection = expected minutes x per-minute production, each estimated as a Bayesian blend:
+
+        this season (recency-weighted, short memory)  -- the evidence
+        last season (near full-season average)         -- a prior worth k games
+
+    so in October last season's average dominates, and by December this season's form does.
+    Minutes and rates get separate half-lives and separate k: minutes jump with injuries,
+    rotations and trades; per-minute production is closer to a stable skill. A single
+    recency weight across the offseason projected players from their last 5 games of the
+    previous season (rookie walls, tanking, shutdowns), which is a bad October predictor.
+    """
     if as_of is not None:
         logs = logs[logs["game_date"] < pd.Timestamp(as_of)]
+    seasons = sorted(logs["season"].unique())
+    cur_s = seasons[-1]
+    prev_s = seasons[-2] if len(seasons) > 1 else None
+    logs = logs[logs["season"].isin([cur_s, prev_s])]
     pcts = league_pcts(logs)
-    df = _with_linear_ratio_stats(recency_weights(logs, params), pcts)
+    df = _with_linear_ratio_stats(logs, pcts)
     cols = STATS + [k + "_lin" for k, d in config.CATEGORY_DEFS.items() if d[1] == "ratio"]
-    w = df["w"].to_numpy()[:, None]
-    vals = df[cols].to_numpy(dtype=float)
-    g = df["nba_id"].to_numpy()
-    ids, inv = np.unique(g, return_inverse=True)
-    sw = np.bincount(inv, weights=w[:, 0])
-    sw2 = np.bincount(inv, weights=w[:, 0] ** 2)
-    mean = np.stack([np.bincount(inv, weights=w[:, 0] * vals[:, j]) for j in range(len(cols))], 1) / sw[:, None]
-    sq = np.stack([np.bincount(inv, weights=w[:, 0] * vals[:, j] ** 2) for j in range(len(cols))], 1) / sw[:, None]
-    # Shrink toward a generic rotation player with PRIOR_GAMES pseudo-games, so one hot
-    # (or cold) game can't define a player. Rotation player = 12+ min, 10+ games.
-    rot = (np.bincount(inv) >= 10) & (mean[:, 0] >= 12)
-    prior_mu, prior_sq = mean[rot].mean(0), sq[rot].mean(0)
-    # Blend on raw games played, not decayed weight: a full season sums to only ~11 weight
-    # units at the default half-life, which would over-shrink established players.
-    n = np.bincount(inv).astype(float)
-    alpha = (n / (n + PRIOR_GAMES))[:, None]
-    mean = alpha * mean + (1 - alpha) * prior_mu
-    sq = alpha * sq + (1 - alpha) * prior_sq
+    ids = np.unique(df["nba_id"].to_numpy())
+    C = _align(_season_estimates(df[df["season"] == cur_s], cols,
+                                 params["half_life_games"], params.get("half_life_minutes", 4.0)), ids)
+    if prev_s is not None and (df["season"] == prev_s).any():
+        P = _align(_season_estimates(df[df["season"] == prev_s], cols,
+                                     PRIOR_SEASON_HALF_LIFE, PRIOR_SEASON_HALF_LIFE), ids)
+    else:
+        P = {k: np.zeros_like(v) for k, v in C.items()}
+    # a prior can't be worth more games than it was built from
+    k_r = np.minimum(P["n"], params.get("prior_strength_games", 15.0))
+    k_m = np.minimum(P["n"], params.get("prior_strength_minutes", 8.0))
+    nc = C["n"]
+    blend = lambda c, p, k: (nc.reshape(-1, *[1] * (c.ndim - 1)) * c + k.reshape(-1, *[1] * (c.ndim - 1)) * p) / \
+        np.maximum(nc + k, 1e-9).reshape(-1, *[1] * (c.ndim - 1))
+    proj_min, rate, sq = blend(C["min"], P["min"], k_m), blend(C["rate"], P["rate"], k_r), blend(C["sq"], P["sq"], k_r)
+    # Then shrink toward a generic rotation player with PRIOR_GAMES pseudo-games, so a
+    # rookie's one hot (or cold) game can't define him.
+    n = nc + k_r
+    rot = ((nc + P["n"]) >= 10) & (proj_min >= 12)   # rotation players, judged on all games seen
+    if not rot.any():
+        raise ValueError("no rotation players to build the league prior from (not enough games)")
+    alpha = n / (n + PRIOR_GAMES)
+    proj_min = alpha * proj_min + (1 - alpha) * proj_min[rot].mean()
+    rate = alpha[:, None] * rate + (1 - alpha[:, None]) * rate[rot].mean(0)
+    sq = alpha[:, None] * sq + (1 - alpha[:, None]) * sq[rot].mean(0)
+    mean = rate * proj_min[:, None]
+    mean[:, 0] = proj_min
     std = np.sqrt(np.maximum(sq - mean ** 2, 0))
     out = pd.DataFrame(mean, index=ids, columns=cols)
     out = out.join(pd.DataFrame(std, index=ids, columns=[c + "_sd" for c in cols]))
-    out["n_games"] = np.bincount(inv)
-    out["n_eff"] = sw ** 2 / sw2
-    out["cur_games"] = df.assign(cur=df["season"] == config.SEASON).groupby("nba_id")["cur"].sum().reindex(ids).to_numpy()
+    out["n_games"] = (nc + P["n"]).astype(int)
+    out["cur_games"] = nc.astype(int)
+    out["n_eff"] = C["n_eff"] + k_r
     out.index.name = "nba_id"
     out.attrs["pcts"] = pcts
+    out.attrs["season"] = cur_s
     return out
 
 

@@ -124,7 +124,16 @@ def kv_get(key, default=None):
 
 def kv_set(key, value):
     with cursor() as c:
-        c.execute("INSERT OR REPLACE INTO kv(key, value) VALUES (?, ?)", (key, json.dumps(value)))
+        c.execute("INSERT OR REPLACE INTO kv(key, value) VALUES (?, ?)", (key, json.dumps(value, default=_jsonable)))
+
+
+def _jsonable(o):
+    # numpy scalars (player ids from pandas indexes, float64s) aren't JSON-serializable
+    if hasattr(o, "item"):
+        return o.item()
+    if hasattr(o, "tolist"):
+        return o.tolist()
+    raise TypeError(f"not JSON serializable: {type(o).__name__}")
 
 
 def get_params() -> dict:

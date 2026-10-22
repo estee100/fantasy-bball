@@ -17,6 +17,7 @@ from . import config, db, model, nba
 SIM_STATS = ["fgm", "fga", "fg3m", "fg3a", "ftm", "fta", "oreb", "dreb", "reb", "ast",
              "stl", "blk", "tov", "pts", "dd", "td"]
 POOL_GAMES = 40
+POOL_HALF_LIFE = 15.0  # sampling window for the shape of outcomes (not the mean)
 
 
 @dataclass
@@ -155,12 +156,19 @@ def _pool(ctx: Context, pid):
     mult = model.production_multiplier(pid, ctx.events, ctx.params)
     if len(g) >= 5:
         lines = g[SIM_STATS].to_numpy(dtype=float)
-        w = model.recency_weights(g, ctx.params)["w"].to_numpy()
+        # The projection's half-life is tuned for the *mean* and can be very short; sampling
+        # with it would bootstrap from ~8 games. Use a long window for the shape of outcomes,
+        # then rescale each stat so the pool's mean equals the projection.
+        w = model.recency_weights(g, dict(ctx.params, half_life_games=POOL_HALF_LIFE))["w"].to_numpy()
         probs = w / w.sum()
-        # nudge the pool toward the shrunk projection when the sample is small
-        if pid in ctx.proj.index and len(g) < 15:
+        if pid in ctx.proj.index:
             target = ctx.proj.loc[pid, SIM_STATS].to_numpy(dtype=float)
-            lines = 0.5 * lines + 0.5 * target
+            pool_mean = probs @ lines
+            scale = np.clip(np.divide(target, pool_mean, out=np.ones_like(target), where=pool_mean > 0), 0.5, 2.0)
+            lines = lines * scale
+            ix = {s: j for j, s in enumerate(SIM_STATS)}
+            for m, a in (("fgm", "fga"), ("fg3m", "fg3a"), ("ftm", "fta")):
+                lines[:, ix[m]] = np.minimum(lines[:, ix[m]], lines[:, ix[a]])
     else:
         lines = _synthetic_lines(ctx, pid)
         probs = np.full(len(lines), 1 / len(lines))

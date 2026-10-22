@@ -187,8 +187,10 @@ def matchup_report() -> dict:
 
 # ------------------------------------------------------------------ projection tuning
 
-GRID_HALF_LIFE = [3, 4, 6, 8, 10, 15, 25]
-GRID_PRIOR_W = [0.25, 0.5, 0.75, 1.0]
+GRID_HALF_LIFE = [4, 6, 10, 15, 25, 40]      # per-minute production, this season
+GRID_HALF_LIFE_MIN = [2, 3, 4, 6, 10, 20]    # minutes, this season
+GRID_PRIOR_K = [6, 12, 20, 35, 60, 100]      # how many games last season's rates are worth
+GRID_PRIOR_K_MIN = [0.5, 1, 2, 4, 8]         # ... and last season's minutes
 
 
 def _backtest_error(logs, params, dates, cats):
@@ -203,50 +205,90 @@ def _backtest_error(logs, params, dates, cats):
         for k in cats:
             col = model.cat_column(k)
             sd = proj[col].std() or 1.0
-            errs += float((((actual.loc[common, col] - proj.loc[common, col]) / sd) ** 2).sum())
+            e = (((actual.loc[common, col] - proj.loc[common, col]) / sd) ** 2).to_numpy()
+            if np.isnan(e).any():  # never let pandas silently skip bad projections
+                raise ValueError(f"NaN projection error for {col} on {d}")
+            errs += float(e.sum())
         n += len(common)
     return errs / max(n, 1), n
 
 
-def tune_projections(max_dates=8):
-    """Walk-forward: for each test date, project using only earlier games, score that date.
-    No look-ahead. Picks the (half-life, prior weight) with the lowest error."""
+def _grid(logs, params, dates, cats, grid: dict):
+    keys = list(grid)
+    results = []
+
+    def rec(i, cur):
+        if i == len(keys):
+            err, n = _backtest_error(logs, dict(params, **cur), dates, cats)
+            results.append((err, dict(cur), n))
+            return
+        for v in grid[keys[i]]:
+            rec(i + 1, dict(cur, **{keys[i]: v}))
+    rec(0, {})
+    results.sort(key=lambda r: r[0])
+    return results
+
+
+def tune_projections(max_dates=10):
+    """Walk-forward backtest: for each test date, project from earlier games only, score that
+    date's actual box scores. No look-ahead. Two questions, two test windows:
+
+      in-season memory (half-lives): the most recent dates of this season, once there are
+          enough; until then, dates spread across the middle of last season
+      how much last season counts (prior strength k): the first 4 weeks of last season,
+          predicted with the season before it as the prior. That's exactly the situation in
+          October, which is when it matters most.
+    """
     from . import nba
     logs = nba.load_logs()
-    cats = model.league_categories() if model.scoring_mode() == "categories" else \
-        [k for k in ("pts", "reb", "ast", "stl", "blk", "tov", "fg3m")]
-    cur = logs[logs["season"] == config.SEASON]
-    cur_dates = sorted(cur["game_date"].unique())
-    if len(cur_dates) >= 10:
-        dates = cur_dates[-max_dates:]
-        grid_prior = GRID_PRIOR_W
-    else:
-        # Too early in the season: tune recency on the end of last season instead. The
-        # prior-season weight can't be learned there (it's all one season), so keep it.
-        prior = logs[logs["season"] == config.PRIOR_SEASON]
-        dates = sorted(prior["game_date"].unique())[-40::5][:max_dates]
-        grid_prior = [db.get_params()["prior_season_weight"]]
+    cats = model.league_categories() if model.scoring_mode() == "categories" else         ["pts", "reb", "ast", "stl", "blk", "tov", "fg3m"]
     params = db.get_params()
-    results = []
-    for hl in GRID_HALF_LIFE:
-        for pw in grid_prior:
-            p = dict(params, half_life_games=hl, prior_season_weight=pw)
-            err, n = _backtest_error(logs, p, dates, cats)
-            results.append((err, hl, pw, n))
-    results.sort()
-    best_err, hl, pw, n = results[0]
-    # naive baseline: flat season average (no recency weighting)
-    base_err, _ = _backtest_error(logs, dict(params, half_life_games=10_000, prior_season_weight=1.0), dates, cats)
+    out = {}
+
+    cur_dates = sorted(logs[logs["season"] == config.SEASON]["game_date"].unique())
+    if len(cur_dates) >= 10:
+        mem_logs, mem_dates = logs, cur_dates[-max_dates:]
+    else:
+        prior = sorted(logs[logs["season"] == config.PRIOR_SEASON]["game_date"].unique())
+        lo, hi = int(len(prior) * 0.2), int(len(prior) * 0.85)
+        mem_logs = logs[logs["season"] != config.SEASON]
+        mem_dates = [prior[int(i)] for i in np.linspace(lo, hi, max_dates)] if prior else []
+    early = logs[logs["season"].isin([config.PRIOR2_SEASON, config.PRIOR_SEASON])]
+    p_dates = sorted(early[early["season"] == config.PRIOR_SEASON]["game_date"].unique())
+    k_dates = []
+    if (early["season"] == config.PRIOR2_SEASON).any() and p_dates:
+        first = [d for d in p_dates if d <= p_dates[0] + np.timedelta64(28, "D")]
+        k_dates = [first[int(i)] for i in np.linspace(1, len(first) - 1, min(max_dates, len(first) - 1))]
+
+    # The two windows interact (k matters a bit mid-season, half-lives a bit in October),
+    # so alternate: memory -> prior strength -> memory.
+    for step in ("memory", "prior_strength", "memory"):
+        if step == "memory":
+            grid = {"half_life_games": GRID_HALF_LIFE, "half_life_minutes": GRID_HALF_LIFE_MIN}
+            res = _grid(mem_logs, params, mem_dates, cats, grid)
+        elif k_dates:
+            grid = {"prior_strength_games": GRID_PRIOR_K, "prior_strength_minutes": GRID_PRIOR_K_MIN}
+            res = _grid(early, params, k_dates, cats, grid)
+        else:
+            continue
+        params.update(res[0][1])
+        out[step] = {"best": res[0][1], "error": res[0][0], "n": res[0][2],
+                     "grid": [dict(p, err=e) for e, p, _ in res]}
+
+    # baselines on the same in-season dates: flat averages, and last-N-games-only
+    flat = dict(params, half_life_games=10_000, half_life_minutes=10_000)
+    out["baseline_error"], _ = _backtest_error(mem_logs, flat, mem_dates, cats)
+    out["model_error"], n = _backtest_error(mem_logs, params, mem_dates, cats)
+    best = {k: params[k] for k in ("half_life_games", "half_life_minutes",
+                                   "prior_strength_games", "prior_strength_minutes")}
     stored = db.kv_get("model_params", {})
-    stored.update({"half_life_games": hl, "prior_season_weight": pw})
+    stored.update(best)
     db.kv_set("model_params", stored)
     with db.cursor() as c:
         c.execute("INSERT INTO backtests(created, params, model_err, baseline_err, n) VALUES (?,?,?,?,?)",
-                  (db.now_iso(), json.dumps({"half_life_games": hl, "prior_season_weight": pw}),
-                   best_err, base_err, n))
-    return {"half_life_games": hl, "prior_season_weight": pw, "error": best_err,
-            "baseline_error": base_err, "n_player_games": n,
-            "grid": [{"err": e, "half_life": h, "prior_w": w} for e, h, w, _ in results]}
+                  (db.now_iso(), json.dumps(best), out["model_error"], out["baseline_error"], n))
+    out["params"] = best
+    return out
 
 
 def learn_news_multipliers(min_events=3):
