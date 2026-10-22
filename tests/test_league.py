@@ -344,7 +344,7 @@ def test_transaction_log_parses_blocks_and_cut_off_team(ctx, pid):
     assert nurk["when"].utcoffset().total_seconds() == -4 * 3600   # Yahoo times are US Eastern
 
 
-def test_transaction_log_applies_once_and_only_newer_moves():
+def test_transaction_log_applies_once_and_only_newer_moves(league_db):
     from datetime import date
     from pathlib import Path
     from fbb import yahoo_log, db
