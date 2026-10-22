@@ -948,8 +948,29 @@ async function loadEditor(key) {
     }, 200);
   });
   input.addEventListener("blur", () => setTimeout(() => opts.classList.add("hidden"), 200));
+  // Drop: inline choices on the row (no browser pop-ups: they're easy to dismiss by accident
+  // and Chrome can silently block repeated ones). On your team you can also hold the drop
+  // and pair it with your next add, so the swap is scored as one move.
+  const mineTeam = setupData?.teams.find((t) => t.team_key === key)?.is_mine;
+  if (pendingDrop && pendingDrop.key === key) {
+    const pd = d.players.find((p) => p.nba_id === pendingDrop.pid);
+    pk.insertAdjacentHTML("beforebegin", `<div class="note" style="border-left:3px solid var(--warning);margin-bottom:8px">
+      <b>${esc(pd ? pd.name : "Player")}</b> will be dropped when you add someone below (logged as one swap).
+      <button class="btn ghost small" id="pending-now">Drop him now instead</button> <button class="btn ghost small" id="pending-cancel">Cancel</button></div>`);
+    $("#pending-now").addEventListener("click", () => { const pid = pendingDrop.pid; pendingDrop = null; editRoster(key, { drop: pid }); });
+    $("#pending-cancel").addEventListener("click", () => { pendingDrop = null; loadEditor(key); });
+  }
   $$("[data-drop]", el).forEach((b) => b.addEventListener("click", () => {
-    if (confirm("Drop this player?")) editRoster(key, { drop: +b.dataset.drop });
+    const pid = +b.dataset.drop;
+    const cell = b.parentElement;
+    b.outerHTML = `<span style="display:inline-flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+      <button class="btn small" data-act="now" style="color:var(--critical)">Drop now</button>
+      ${mineTeam ? '<button class="btn ghost small" data-act="pair" title="Hold the drop until you add someone: logged as one swap">Drop with my next add</button>' : ""}
+      <button class="btn ghost small" data-act="cancel">Cancel</button></span>`;
+    $("[data-act=now]", cell).addEventListener("click", () => editRoster(key, { drop: pid }));
+    const pair = $("[data-act=pair]", cell);
+    if (pair) pair.addEventListener("click", () => { pendingDrop = { key, pid }; loadEditor(key); });
+    $("[data-act=cancel]", cell).addEventListener("click", () => loadEditor(key));
   }));
   $$("[data-slot]", el).forEach((s) => s.addEventListener("change", async () => {
     await api("/api/manual/slot", { method: "POST", body: JSON.stringify({ team_key: key, nba_id: +s.dataset.slot, slot: s.value }) });
@@ -958,22 +979,19 @@ async function loadEditor(key) {
   bindPlayerLinks(el);
 }
 
-let pendingDrop = null;
+let pendingDrop = null;  // {key, pid}: a drop held until the next add on that team
 async function editRoster(key, change) {
-  // A drop and the next add on your own team are sent together, so they're logged as one move.
-  const mine = setupData?.teams.find((t) => t.team_key === key)?.is_mine;
-  if (mine && change.drop && !change.add) {
-    pendingDrop = change.drop;
-  }
   const body = { team_key: key, ...change };
-  if (mine && change.add && pendingDrop) { body.drop = pendingDrop; pendingDrop = null; }
-  if (mine && change.drop && !change.add) {
-    const pick = confirm("Drop now? Press Cancel to drop him together with your next add instead (logged as one move, so the model can score it).");
-    if (!pick) { loadEditor(key); return; }
+  if (change.add && pendingDrop && pendingDrop.key === key) {  // the held drop goes with this add
+    body.drop = pendingDrop.pid;
     pendingDrop = null;
   }
   const r = await fetch("/api/manual/roster", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (!r.ok) { const d = await r.json(); alert(d.detail || "Edit failed"); return; }
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    $("#roster-editor").insertAdjacentHTML("afterbegin", `<div class="note" style="border-left:3px solid var(--critical);margin-bottom:8px">${esc(d.detail || "Edit failed")}</div>`);
+    return;
+  }
   loadEditor(key); loadSetup(); afterManualChange();
 }
 
