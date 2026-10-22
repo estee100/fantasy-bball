@@ -276,10 +276,40 @@ def _games_out(pid, injuries, events):
     return None
 
 
+# Share of games a player with no injury listing still misses (new injuries, rest, illness).
+# Learned from box scores by miss_rates(); set from params when a context loads.
+HEALTHY_GAME = 0.94     # per-game chance a non-listed player suits up this week
+HEALTHY_ROS = 0.90      # share of the rest of the season a non-listed player plays
+
+
+def miss_rates(logs: pd.DataFrame, season: str) -> dict:
+    """How often rotation players miss their team's games, from one season of box scores.
+    short: misses in runs of 1-3 games (mostly unannounced: rest, illness, knocks)
+    all:   every miss, including long injuries (announced, in practice, once they happen)"""
+    s = logs[logs["season"] == season]
+    team_dates = {t: sorted(g.unique()) for t, g in s.groupby("team")["game_date"]}
+    short = total = team_games = 0
+    for (pid, team), g in s.groupby(["nba_id", "team"]):
+        if len(g) < 20:
+            continue
+        played = set(g["game_date"])
+        span = [d for d in team_dates[team] if g["game_date"].min() <= d <= g["game_date"].max()]
+        run = 0
+        for d in span + [None]:
+            if d is not None and d not in played:
+                run += 1
+                continue
+            total += run
+            short += run if run <= 3 else 0
+            run = 0
+        team_games += len(span)
+    return {"short": short / max(team_games, 1), "all": total / max(team_games, 1), "player_team_games": team_games}
+
+
 def availability(pid, game_dates, injuries, events, b2b, team_dates_set):
     """Probability the player suits up for each of `game_dates` (ISO strings, sorted)."""
     inj = injuries.get(pid)
-    base = 1.0
+    base = HEALTHY_GAME
     if inj:
         status = (inj["status"] or "").lower()
         base = INJURY_AVAIL.get(status, 0.7)
@@ -312,11 +342,11 @@ def ros_availability(pid, injuries, events) -> float:
     games_out = _games_out(pid, injuries, events)
     left = max(season_games_left(), 1.0)
     if games_out is not None:
-        return max(0.0, 1 - games_out / left) * 0.95
+        return max(0.0, 1 - games_out / left) * HEALTHY_ROS
     if not inj:
-        return 0.95
+        return HEALTHY_ROS
     status = (inj["status"] or "").lower()
-    return {"out": 0.8, "doubtful": 0.88, "questionable": 0.92}.get(status, 0.93)
+    return HEALTHY_ROS * {"out": 0.85, "doubtful": 0.92, "questionable": 0.97}.get(status, 0.98)
 
 
 def production_multiplier(pid, events, params) -> float:

@@ -187,6 +187,7 @@ def matchup_report() -> dict:
 
 # ------------------------------------------------------------------ projection tuning
 
+MIN_IMPROVEMENT = 0.005  # keep current settings unless a new one is >0.5% better: no chasing noise
 GRID_HALF_LIFE = [4, 6, 10, 15, 25, 40]      # per-minute production, this season
 GRID_HALF_LIFE_MIN = [2, 3, 4, 6, 10, 20]    # minutes, this season
 GRID_PRIOR_K = [6, 12, 20, 35, 60, 100]      # how many games last season's rates are worth
@@ -203,6 +204,16 @@ def _backtest_error(logs, params, dates, cats):
         if len(common) == 0:
             continue
         for k in cats:
+            if k == "_points":  # points league: the error that matters is in fantasy points
+                pw = model.point_weights()
+                pred = sum(proj.loc[common, s] * w for s, w in pw.items())
+                act = sum(actual.loc[common, s] * w for s, w in pw.items())
+                sd = pred.std() or 1.0
+                e = (((act - pred) / sd) ** 2).to_numpy()
+                if np.isnan(e).any():
+                    raise ValueError(f"NaN projection error for fantasy points on {d}")
+                errs += float(e.sum())
+                continue
             col = model.cat_column(k)
             sd = proj[col].std() or 1.0
             e = (((actual.loc[common, col] - proj.loc[common, col]) / sd) ** 2).to_numpy()
@@ -241,9 +252,9 @@ def tune_projections(max_dates=10):
     """
     from . import nba
     logs = nba.load_logs()
-    cats = model.league_categories() if model.scoring_mode() == "categories" else         ["pts", "reb", "ast", "stl", "blk", "tov", "fg3m"]
+    cats = model.league_categories() if model.scoring_mode() == "categories" else ["_points"]
     params = db.get_params()
-    out = {}
+    out = {"objective": "fantasy points" if cats == ["_points"] else "category z-scores"}
 
     cur_dates = sorted(logs[logs["season"] == config.SEASON]["game_date"].unique())
     if len(cur_dates) >= 10:
@@ -271,8 +282,14 @@ def tune_projections(max_dates=10):
             res = _grid(early, params, k_dates, cats, grid)
         else:
             continue
-        params.update(res[0][1])
-        out[step] = {"best": res[0][1], "error": res[0][0], "n": res[0][2],
+        test_logs, test_dates = (mem_logs, mem_dates) if step == "memory" else (early, k_dates)
+        current = {k: params.get(k) for k in res[0][1]}
+        cur_err, _ = _backtest_error(test_logs, params, test_dates, cats)
+        adopted = res[0][0] < cur_err * (1 - MIN_IMPROVEMENT)
+        if adopted:
+            params.update(res[0][1])
+        out[step] = {"best": res[0][1], "error": res[0][0], "n": res[0][2], "current": current,
+                     "current_error": cur_err, "adopted": adopted,
                      "grid": [dict(p, err=e) for e, p, _ in res]}
 
     # baselines on the same in-season dates: flat averages, and last-N-games-only
@@ -332,3 +349,27 @@ def report() -> dict:
         m["rationale"] = json.loads(m["rationale"]) if m["rationale"] else []
     return {"moves": moves, "calibration": db.kv_get("calibration", {"bins": [], "n": 0}),
             "matchups": matchup_report(), "backtests": bt, "params": db.get_params()}
+
+
+
+def resolve_from_box_scores(ctx) -> int:
+    """Manual mode has no Yahoo scoreboard: once a week is over, decide each logged matchup from
+    box scores (starters by pasted slot), so weekly forecasts still get graded."""
+    from datetime import date
+    from . import sim
+    if db.kv_get("league_source") == "yahoo":
+        return 0
+    with db.cursor() as c:
+        rows = c.execute("SELECT DISTINCT week, team_key, opp_key FROM matchup_predictions "
+                         "WHERE result IS NULL").fetchall()
+    done = 0
+    for r in rows:
+        start, end = sim.week_range_for(r["week"])
+        if end >= date.today().isoformat() or r["team_key"] not in ctx.rosters or r["opp_key"] not in ctx.rosters:
+            continue
+        a = sim.actual_totals(ctx, r["team_key"], start, end)
+        b = sim.actual_totals(ctx, r["opp_key"], start, end)
+        res, _, _ = sim.score_totals(ctx, a[None, :], b[None, :])
+        resolve_matchups({r["week"]: res})
+        done += 1
+    return done

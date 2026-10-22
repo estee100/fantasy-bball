@@ -263,6 +263,8 @@ def learning_report():
     for m in rep["moves"]:
         m["add_name"], m["drop_name"] = ctx.name(m["add_id"]), ctx.name(m["drop_id"])
     with db.cursor() as c:
+        mb = db.kv_get("matchup_backtest")
+        rep["matchup_backtest"] = {k: v for k, v in mb.items() if k not in ("rows", "form_table")} if mb else None
         rep["news_events_by_type"] = [dict(r) for r in c.execute(
             "SELECT event_type, count(*) n FROM news_events GROUP BY event_type ORDER BY n DESC")]
     return _json(rep)

@@ -60,6 +60,7 @@ def recommend(ctx: sim.Context, n_sims=1000, top=8, seed=11) -> dict:
     b = sim.simulate_team(ctx, opp, dates, n_sims, seed + 1, wtd_opp)
     base_a = sim.simulate_team(ctx, mine, dates, n_sims, seed, wtd_me)
     base_win, base_cats, _ = sim.score_totals(ctx, base_a, b)
+    base_win = sim.calibrated(base_win, ctx.params)
     avg = sim.league_average_dist(ctx)
     base_season = sim.season_strength(ctx, mine, avg)
     eff = effective_weeks(ctx)
@@ -80,6 +81,7 @@ def recommend(ctx: sim.Context, n_sims=1000, top=8, seed=11) -> dict:
             new = [p for p in mine if p != d] + [a]
             A = sim.simulate_team(ctx, new, dates, n_sims, seed, wtd_me)
             win, cats, _ = sim.score_totals(ctx, A, b)
+            win = sim.calibrated(win, ctx.params)
             dw = win - base_win
             ds = (sim.season_strength(ctx, new, avg) - base_season) * eff
             kind = "stream" if ds < 0 < dw else "upgrade"

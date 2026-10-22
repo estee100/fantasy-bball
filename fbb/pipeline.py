@@ -81,11 +81,16 @@ def refresh(daily=False) -> dict:
             db.kv_set("recommendations", r)
         _step(status, "start_sit", lambda: db.kv_set("start_sit", recommend.start_sit_today(ctx)) or "ok")
         _step(status, "evaluate_moves", learning.evaluate_moves, ctx.logs)
+        _step(status, "resolve_matchups", learning.resolve_from_box_scores, ctx)
         _step(status, "league_table", lambda: db.kv_set("league_table", league_table(ctx)) or "ok")
 
         if daily or db.kv_get("daily_done") != date.today().isoformat():
             _step(status, "tune_projections", learning.tune_projections)
             _step(status, "news_multipliers", learning.learn_news_multipliers)
+            last_bt = db.kv_get("matchup_backtest") or {}
+            if not last_bt or (datetime.now(timezone.utc) - datetime.fromisoformat(last_bt["created"])).days >= 7:
+                from . import backtest  # weekly: re-check calibration of win probabilities
+                _step(status, "matchup_backtest", lambda: backtest.store(backtest.calibrate()) or "ok")
             _step(status, "scouting_folder", lambda: len(news.ingest_report_folder()))
             db.kv_set("daily_done", date.today().isoformat())
             context(reload=True)

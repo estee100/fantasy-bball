@@ -621,8 +621,15 @@ function renderLearning(d) {
     kpi("Moves tracked", moves.length, "suggestions + your own roster changes", null),
     kpi("Moves scored", `${scored.length} <small>${final.length} final</small>`, "scored 7 days in (provisional) and at horizon end", null),
     kpi("Hit rate", scored.length ? pct(hits / scored.length) : "–", scored.length ? `avg stated confidence ${pct(scored.reduce((a, m) => a + (m.raw_confidence || 0), 0) / scored.length)}` : "no scored moves yet", null),
-    kpi("Matchup forecast", mm.n ? fmt(mm.brier, 3) : "–", mm.n ? `Brier score over ${mm.n} week${mm.n > 1 ? "s" : ""} (coin flip = 0.250, lower is better)` : "first score after week 1 resolves", null),
+    kpi("Matchup forecast", mm.n ? fmt(mm.brier, 3) : (d.matchup_backtest ? fmt(d.matchup_backtest.calibrated.brier, 3) : "–"),
+      mm.n ? `Brier score over ${mm.n} live week${mm.n > 1 ? "s" : ""} (coin flip = 0.250, lower is better)`
+        : d.matchup_backtest ? `backtest: ${d.matchup_backtest.n_matchups} matchups last season, picked the winner ${pct(d.matchup_backtest.calibrated.accuracy)} (coin flip = 0.250)` : "first score after week 1 resolves", null),
   ].join("");
+  const MB = d.matchup_backtest;
+  $("#mb-note").innerHTML = MB ? `<b>Weekly win probability, backtested on ${MB.n_matchups} matchups from last season</b> (simulated 12-team leagues, predicted using only data available before each week, scored on real box scores).
+    Brier ${fmt(MB.calibrated.brier, 3)} vs 0.250 for a coin flip; picks the winner ${pct(MB.calibrated.accuracy)} of the time.
+    Learned from it: players with no injury listing still miss ${pct(MB.miss_rates.short, 0)} of games in short absences; weekly form spread ${MB.form_sd}; final calibration temperature ${fmt(MB.T_used, 2)}.
+    <div class="legend" style="margin-top:6px">${(MB.bins_calibrated || []).map((b) => `<span>said ${pct(b.mean_p)} → won ${pct(b.win_rate)} <span class="muted">(n=${b.n})</span></span>`).join("")}</div>` : "";
 
   // calibration
   const bins = (d.calibration?.bins || []).filter((b) => b.n > 0);
@@ -665,7 +672,10 @@ function renderLearning(d) {
     ["half_life_games", "Production memory", (v) => `${v} games`, "Recency weighting for per-minute production within this season."],
     ["prior_strength_games", "Last season's production counts as", (v) => `${v} games`, "In October, per-minute production leans on last season; by mid-season, this season takes over."],
     ["prior_strength_minutes", "Last season's minutes count as", (v) => `${v} games`, "Minutes change across the offseason (trades, new roles), so last year's minutes are trusted far less."],
-    ["future_week_discount", "Future-week discount", (v) => `${v}`, "How much an edge next week counts vs this week (projections drift; you'll make more moves)."],
+    ["future_week_discount", "Future-week discount", (v) => `${v}`, "How much an edge next week counts vs this week (projections drift; you'll make more moves). A judgment call, not learned."],
+    ["miss_rate_short", "Unannounced absences", (v) => pct(v, 1), "Share of games a player with no injury listing still misses (rest, illness, knocks). Counted from box scores."],
+    ["weekly_form_sd", "Weekly form spread", (v) => `${v}`, "How much a player's level drifts within a week. Tuned on the first half of last season, checked on the second."],
+    ["win_prob_temperature", "Win-probability calibration", (v) => fmt(v, 2), "Final correction from the matchup backtest: 1.0 = none needed, above 1 = pull forecasts toward 50%."],
   ];
   const nm = Object.entries(P.news_multipliers || {});
   $("#params").innerHTML = `<thead><tr><th>Parameter</th><th class="r">Learned value</th><th>What it means</th></tr></thead><tbody>

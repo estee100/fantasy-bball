@@ -42,6 +42,7 @@ class Context:
     num_teams: int
     weeks_remaining: int
     wtd: dict = field(default_factory=dict)     # team_key -> {stat: value} week-to-date
+    today: str | None = None                    # backtests replay the past: "today" is the week start
     _pools: dict = field(default_factory=dict)
     _team_dates: dict = field(default_factory=dict)
 
@@ -61,6 +62,7 @@ class Context:
 
 def load_context() -> Context:
     params = db.get_params()
+    apply_rates(params)
     logs = nba.load_logs()
     proj = model.project(logs, params)
     num_teams = db.kv_get("num_teams", 10)
@@ -73,8 +75,9 @@ def load_context() -> Context:
         for r in c.execute("SELECT team_key, nba_id FROM rosters"):
             rosters.setdefault(r["team_key"], []).append(r["nba_id"])
     my_key = next((k for k, t in teams.items() if t["is_mine"]), None)
-    week = db.kv_get("current_week", 1)
-    ws, we = db.kv_get("week_range", default_week_range())
+    week = db.kv_get("current_week", 1) if db.kv_get("league_source") == "yahoo" else season_week()
+    ws, we = db.kv_get("week_range") if db.kv_get("league_source") == "yahoo" and db.kv_get("week_range") \
+        else week_range_for(season_week())
     ctx = Context(logs=logs, proj=proj, values=values, params=params,
                   injuries=model.injury_table(), events=model.recent_news_events(),
                   b2b=model.back_to_back_sit_rates(logs), players=players, rosters=rosters,
@@ -84,6 +87,57 @@ def load_context() -> Context:
                   weeks_remaining=db.kv_get("weeks_remaining", default_weeks_remaining()),
                   wtd=db.kv_get("week_to_date") or {})
     return ctx
+
+
+def apply_rates(params: dict):
+    """Push learned absence rates into the availability model."""
+    model.HEALTHY_GAME = 1 - params.get("miss_rate_short", 0.06)
+    model.HEALTHY_ROS = 1 - params.get("miss_rate_all", 0.10)
+
+
+def season_week(today=None) -> int:
+    """Week number counted from the Monday of the season's first game week (Yahoo's week 1)."""
+    with db.cursor() as c:
+        first = c.execute("SELECT min(game_date) FROM schedule").fetchone()[0]
+    if not first:
+        return 1
+    f = date.fromisoformat(first)
+    f_mon = f - timedelta(days=f.weekday())
+    t = today or date.today()
+    t_mon = t - timedelta(days=t.weekday())
+    return max(1, (t_mon - f_mon).days // 7 + 1)
+
+
+def week_range_for(week: int):
+    with db.cursor() as c:
+        first = c.execute("SELECT min(game_date) FROM schedule").fetchone()[0]
+    f = date.fromisoformat(first)
+    start = f - timedelta(days=f.weekday()) + timedelta(days=7 * (week - 1))
+    return start.isoformat(), (start + timedelta(days=6)).isoformat()
+
+
+def calibrated(p: float, params: dict) -> float:
+    """Apply the backtest-fitted temperature to a raw simulated win probability."""
+    T = params.get("win_prob_temperature", 1.0) or 1.0
+    if abs(T - 1.0) < 1e-6:
+        return p
+    p = min(max(p, 1e-4), 1 - 1e-4)
+    return 1 / (1 + ((1 - p) / p) ** (1 / T))
+
+
+def actual_totals(ctx, team_key, start: str, end: str):
+    """A team's real totals for a past week from box scores, starters only where slots are known."""
+    pids = ctx.rosters.get(team_key, [])
+    slots = team_slots(ctx).get(team_key, {})
+    if slots and any(s not in ("?", None) for s in slots.values()):
+        pids = [p for p in pids if slots.get(p) not in BENCH_SLOTS]
+    g = ctx.logs[(ctx.logs["game_date"] >= start) & (ctx.logs["game_date"] <= end) & ctx.logs["nba_id"].isin(pids)]
+    val = ctx.values["value"]
+    tot = np.zeros(len(SIM_STATS))
+    for _, day in g.groupby("game_date"):
+        day = day.assign(v=day["nba_id"].map(val).fillna(-99)).nlargest(ctx.active_slots, "v")
+        tot += day[SIM_STATS].to_numpy(dtype=float).sum(0)
+    return tot
 
 
 def default_week_range():
@@ -99,7 +153,7 @@ def default_weeks_remaining():
 
 
 def remaining_dates(ctx: Context) -> list:
-    start = max(ctx.week_start, date.today().isoformat())
+    start = max(ctx.week_start, ctx.today or date.today().isoformat())
     d, out = date.fromisoformat(start), []
     while d.isoformat() <= ctx.week_end:
         out.append(d.isoformat())
@@ -224,6 +278,13 @@ def simulate_team(ctx: Context, pids, dates, n_sims=2000, seed=7, wtd=None) -> n
         totals += np.array([wtd.get(s, 0.0) for s in SIM_STATS])
     value = ctx.values["value"]
     sched = {pid: dict(player_games(ctx, pid, dates)) for pid in pids}
+    # A player's level isn't known exactly and drifts week to week (role, minutes, matchups):
+    # each simulated week draws one shared multiplier per player (mean 1, learned spread).
+    sd = float(ctx.params.get("weekly_form_sd", 0.0) or 0.0)
+    form = {}
+    for pid in pids:
+        z = np.random.default_rng([seed, int(pid), 999]).standard_normal(n_sims)
+        form[pid] = np.exp(sd * z - sd * sd / 2)[:, None] if sd > 0 else 1.0
     for di, d in enumerate(dates):
         playing = [p for p in pids if d in sched[p]]
         playing.sort(key=lambda p: -value.get(p, -99))
@@ -234,7 +295,7 @@ def simulate_team(ctx: Context, pids, dates, n_sims=2000, seed=7, wtd=None) -> n
             rng = np.random.default_rng([seed, int(pid), di])
             lines, probs = _pool(ctx, pid)
             masks.append(rng.random(n_sims) < sched[pid][d])
-            draws.append(lines[rng.choice(len(lines), n_sims, p=probs)])
+            draws.append(lines[rng.choice(len(lines), n_sims, p=probs)] * form[pid])
         masks = np.stack(masks, 1)
         # You can't start more players than active slots: the best available ones play.
         taken = masks & (np.cumsum(masks, 1) <= ctx.active_slots)
@@ -276,6 +337,8 @@ def simulate_matchup(ctx: Context, my_pids=None, opp_pids=None, n_sims=2000, see
     a = simulate_team(ctx, my_pids, dates, n_sims, seed, week_to_date(ctx, ctx.my_key))
     b = simulate_team(ctx, opp_pids, dates, n_sims, seed + 1, week_to_date(ctx, ctx.opp_key))
     win, cats, wins = score_totals(ctx, a, b)
+    raw_win = win
+    win = calibrated(win, ctx.params)
     ix = {s: j for j, s in enumerate(SIM_STATS)}
     summary = {}
     for k in (ctx.cats if model.scoring_mode() == "categories" else []):
@@ -288,8 +351,8 @@ def simulate_matchup(ctx: Context, my_pids=None, opp_pids=None, n_sims=2000, see
     hist = None
     if wins is not None:
         hist = np.bincount(wins.round().astype(int), minlength=len(ctx.cats) + 1).tolist()
-    out = {"win_prob": win, "cat_probs": cats, "expected": summary, "cats_won_hist": hist,
-           "dates": dates, "a": a, "b": b}
+    out = {"win_prob": win, "win_prob_raw": raw_win, "cat_probs": cats, "expected": summary,
+           "cats_won_hist": hist, "dates": dates, "a": a, "b": b}
     if model.scoring_mode() == "points":
         out.update(points_summary(ctx, a, b, ctx.my_key, ctx.opp_key))
     return out
