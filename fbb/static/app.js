@@ -46,6 +46,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#report-btn").addEventListener("click", submitReport);
   $("#team-btn").addEventListener("click", importTeam);
   initWatchPicker();
+  initCheckPicker();
   $("#edit-team").addEventListener("change", () => loadEditor($("#edit-team").value));
   initTrade();
   initTips();
@@ -1018,4 +1019,75 @@ function renderLineup() {
     afterManualChange().then(loadLineup);
   });
   bindPlayerLinks(el);
+}
+
+/* ------------------------------------------------------------------ pickup check */
+function initCheckPicker() {
+  const el = $("#check-picker");
+  el.innerHTML = `<input placeholder="Search any player…" aria-label="Search a player to check"><div class="opts card hidden"></div>`;
+  const input = $("input", el), opts = $(".opts", el);
+  let t;
+  input.addEventListener("input", () => {
+    clearTimeout(t);
+    t = setTimeout(async () => {
+      if (input.value.trim().length < 2) { opts.classList.add("hidden"); return; }
+      const hits = await api(`/api/players/search?q=${encodeURIComponent(input.value.trim())}&scope=others`);
+      opts.innerHTML = hits.map((h) => `<div class="opt" data-id="${h.nba_id}"><span><b>${esc(h.name)}</b> <span class="pteam">${esc(h.team || "no team")}</span></span><span class="muted small">${esc(h.owner)}</span></div>`).join("") || `<div class="opt muted">No match</div>`;
+      opts.classList.remove("hidden");
+      $$(".opt[data-id]", opts).forEach((o) => o.addEventListener("click", () => {
+        input.value = ""; opts.classList.add("hidden"); checkPlayer(+o.dataset.id);
+      }));
+    }, 200);
+  });
+  input.addEventListener("blur", () => setTimeout(() => opts.classList.add("hidden"), 200));
+}
+
+async function checkPlayer(pid) {
+  const el = $("#check-result");
+  el.innerHTML = `<div class="card"><div class="empty">Simulating…</div></div>`;
+  const e = await api("/api/evaluate", { method: "POST", body: JSON.stringify({ nba_id: pid }) });
+  const unit = S.league.scoring_mode === "points" ? "fantasy pts/game" : "value/game";
+  const best = e.options[0];
+  const V = {
+    "Do today": ["st-serious", "Pick him up today"], "Worth doing": ["st-good", "Worth picking up, no rush"],
+    "Marginal": ["", "Marginal: small or uncertain gain"], "not worth it": ["st-critical", "Not worth it: no drop makes your team better"],
+    "owned": ["st-warning", "Not available: on another team"], "already yours": ["", "Already on your team"],
+  }[e.verdict] || ["", e.verdict];
+  const manual = !!S.manual;
+  el.innerHTML = `<div class="card"><div class="hd">
+      <h2><a href="#" class="pname" data-pid="${e.nba_id}">${esc(e.name)}</a></h2><span class="pteam">${esc(e.team || "no NBA team")} · ${fmt(e.per_game, 1)} ${unit}</span>
+      <span class="status ${V[0]}" style="margin-left:auto"><span class="dot" ${V[0] ? "" : 'style="background:var(--axis)"'}></span>${esc(V[1])}</span></div>
+    <div class="bd">
+      ${e.warnings.map((w) => `<div class="note" style="border-left:3px solid var(--warning);margin-bottom:8px">${esc(w)}</div>`).join("")}
+      ${best && e.verdict !== "owned" ? `<p style="margin:4px 0 12px">Best option: <b>drop ${esc(best.drop_name)}</b> → ${signed(best.score, 2)} expected wins
+        (${Math.abs(best.week_dwin * 100) < 1.5 ? "≈0" : signed(best.week_dwin * 100, 1)} pp this week, ${signed(best.season_dwins, 2)} wins rest of season), ${pct(best.confidence)} confident.
+        ${best.urgency_reason ? `<span class="muted">${esc(best.urgency)}: ${esc(best.urgency_reason)}.</span>` : ""}</p>` : ""}
+      ${e.options.length ? `<div class="tbl-wrap"><table><thead><tr><th>If you drop</th><th class="r">This week</th><th class="r">Rest of season</th><th class="r">Total</th><th class="r">Confidence</th><th></th></tr></thead><tbody>
+        ${e.options.map((o, i) => `<tr ${i === 0 && e.verdict !== "owned" ? 'style="background:var(--surface-2)"' : ""}>
+          <td><span class="pname">${esc(o.drop_name)}</span> <span class="pteam">${esc(o.drop_team || "")} · ${o.drop_games} g left</span></td>
+          <td class="r num">${Math.abs(o.week_dwin * 100) < 1.5 ? "≈0" : signed(o.week_dwin * 100, 1) + "pp"}</td>
+          <td class="r num">${signed(o.season_dwins, 2)}</td>
+          <td class="r num"><b class="${o.score > 0.01 ? "delta-up" : o.score < -0.01 ? "delta-down" : ""}">${signed(o.score, 2)}</b></td>
+          <td class="r num">${pct(o.confidence)}</td>
+          <td class="r">${manual && e.verdict !== "owned" && o.score > 0 ? `<button class="btn ghost small" data-do="${o.drop}">Made this move</button>` : ""}</td></tr>`).join("")}
+        </tbody></table></div>
+        <div class="small muted" style="margin-top:8px">"Total" is expected matchup wins added: this week's win-probability change plus the rest-of-season gain. This-week changes within ±1.5pp are simulation noise (≈0).</div>` : ""}
+      <div style="margin-top:10px;display:flex;gap:8px">
+        ${e.verdict !== "already yours" ? `<button class="btn" id="check-watch">☆ Watch${best ? ` vs ${esc(best.drop_name)}` : ""}</button>` : ""}
+      </div>
+    </div></div>`;
+  bindPlayerLinks(el);
+  const w = $("#check-watch");
+  if (w) w.addEventListener("click", async () => {
+    const r = await watchPlayer(e.nba_id, best ? best.drop : null);
+    w.textContent = r.error ? r.error : "★ Watching"; w.disabled = true;
+  });
+  $$("#check-result [data-do]").forEach((b) => b.addEventListener("click", async () => {
+    if (!confirm(`Add ${e.name} and drop this player on your roster here? (Make the move in Yahoo too.)`)) return;
+    const r = await fetch("/api/manual/roster", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ team_key: S.manual.teams.find((t) => t.is_mine).team_key, add: e.nba_id, drop: +b.dataset.do, slot: "BN" }) });
+    const d = await r.json();
+    b.textContent = r.ok ? "Done: logged" : (d.detail || "failed"); b.disabled = true;
+    if (r.ok) afterManualChange();
+  }));
 }

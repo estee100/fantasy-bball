@@ -50,66 +50,120 @@ def horizon_edge(ctx, add, drop, dates, kind="upgrade"):
     return edge, _phi(edge / max(math.hypot(sa, sdd), 1e-6))
 
 
-def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11) -> dict:
+SCREEN_BY_ROS = 30    # free agents screened by rest-of-season value
+SCREEN_BY_WEEK = 15   # ... and by value of this week's games
+SCREEN_DROPS = 4      # your weakest players considered as drops in the automatic search
+
+
+def baseline(ctx: sim.Context, n_sims=3000, seed=11) -> dict:
+    """Everything a swap is compared against, computed once: your roster as it stands."""
     mine = ctx.rosters.get(ctx.my_key, [])
-    if not mine:
-        return {"moves": [], "base": None}
     dates = sim.remaining_dates(ctx)
     opp = ctx.rosters.get(ctx.opp_key, [])
     wtd_me, wtd_opp = sim.week_to_date(ctx, ctx.my_key), sim.week_to_date(ctx, ctx.opp_key)
     b = sim.simulate_team(ctx, opp, dates, n_sims, seed + 1, wtd_opp)
     base_a = sim.simulate_team(ctx, mine, dates, n_sims, seed, wtd_me)
     base_win, base_cats, _ = sim.score_totals(ctx, base_a, b)
-    base_win = sim.calibrated(base_win, ctx.params)
-    base_season = sim.season_strength(ctx, mine)
-    eff = effective_weeks(ctx)
+    return {"mine": mine, "dates": dates, "opp": opp, "wtd_me": wtd_me, "b": b,
+            "base_win": sim.calibrated(base_win, ctx.params), "base_cats": base_cats,
+            "base_season": sim.season_strength(ctx, mine), "eff": effective_weeks(ctx),
+            "alerts": active_alerts_by_player(), "n_sims": n_sims, "seed": seed}
 
+
+def score_swap(ctx, B, a, d) -> dict:
+    """Add `a`, drop `d`: this week's win-probability change (same simulated games for everyone
+    else) + rest-of-season expected wins. The one scoring path every suggestion goes through."""
+    new = [p for p in B["mine"] if p != d] + [a]
+    A = sim.simulate_team(ctx, new, B["dates"], B["n_sims"], B["seed"], B["wtd_me"])
+    win, cats, _ = sim.score_totals(ctx, A, B["b"])
+    dw = sim.calibrated(win, ctx.params) - B["base_win"]
+    ds = (sim.season_strength(ctx, new) - B["base_season"]) * B["eff"]
+    kind = "stream" if ds < 0 < dw else "upgrade"
+    edge, raw_conf = horizon_edge(ctx, a, d, B["dates"], kind)
+    return {"add": a, "drop": d, "kind": kind, "week_dwin": dw, "season_dwins": ds,
+            "score": dw + ds, "edge": edge, "raw_confidence": raw_conf}
+
+
+def describe(ctx, B, m, with_urgency=True) -> dict:
+    """Confidence, plain-language reasons, names, games left, urgency."""
+    dates = B["dates"]
+    m["confidence"] = learning.calibrate(m["raw_confidence"])
+    m["rationale"] = rationale(ctx, m, B["base_cats"], dates, B["alerts"])
+    m["add_name"], m["drop_name"] = ctx.name(m["add"]), ctx.name(m["drop"])
+    m["add_team"], m["drop_team"] = ctx.team_of(m["add"]), ctx.team_of(m["drop"])
+    m["add_games"] = len(sim.player_games(ctx, m["add"], dates))
+    m["drop_games"] = len(sim.player_games(ctx, m["drop"], dates))
+    if with_urgency:
+        m.update(urgency(ctx, m, B["mine"], B["opp"], dates, B["b"], B["wtd_me"], B["n_sims"], B["seed"]))
+    return m
+
+
+def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11) -> dict:
+    mine = ctx.rosters.get(ctx.my_key, [])
+    if not mine:
+        return {"moves": [], "base": None}
+    B = baseline(ctx, n_sims, seed)
+    dates = B["dates"]
     rostered = ctx.rostered()
     with_team = set(ctx.players.index[ctx.players["team"].notna()])
     free = [p for p in ctx.proj.index if p not in rostered and p in with_team and in_rotation(ctx, p)]
     week_games = {p: sum(av for _, av in sim.player_games(ctx, p, dates)) for p in free}
-    by_ros = sorted(free, key=lambda p: -ros_value(ctx, p))[:15]
-    by_week = sorted(free, key=lambda p: -week_games[p] * max(ctx.values["value"].get(p, 0), 0))[:10]
+    by_ros = sorted(free, key=lambda p: -ros_value(ctx, p))[:SCREEN_BY_ROS]
+    by_week = sorted(free, key=lambda p: -week_games[p] * max(ctx.values["value"].get(p, 0), 0))[:SCREEN_BY_WEEK]
     adds = list(dict.fromkeys(by_ros + by_week))
-    drops = sorted(mine, key=lambda p: ros_value(ctx, p))[:4]
-    alerts = active_alerts_by_player()
+    drops = sorted(mine, key=lambda p: ros_value(ctx, p))[:SCREEN_DROPS]
 
-    cands = []
-    for a in adds:
-        for d in drops:
-            new = [p for p in mine if p != d] + [a]
-            A = sim.simulate_team(ctx, new, dates, n_sims, seed, wtd_me)
-            win, cats, _ = sim.score_totals(ctx, A, b)
-            win = sim.calibrated(win, ctx.params)
-            dw = win - base_win
-            ds = (sim.season_strength(ctx, new) - base_season) * eff
-            kind = "stream" if ds < 0 < dw else "upgrade"
-            edge, raw_conf = horizon_edge(ctx, a, d, dates, kind)
-            cands.append({"add": a, "drop": d, "kind": kind, "week_dwin": dw, "season_dwins": ds,
-                          "score": dw + ds, "edge": edge, "raw_confidence": raw_conf,
-                          "cats_after": cats})
-    cands.sort(key=lambda m: -m["score"])
+    cands = sorted((score_swap(ctx, B, a, d) for a in adds for d in drops), key=lambda m: -m["score"])
     picked, used_adds, drop_count = [], set(), {}
     for m in cands:
         if m["score"] <= 0.01 or m["add"] in used_adds or drop_count.get(m["drop"], 0) >= 3:
             continue
         used_adds.add(m["add"])
         drop_count[m["drop"]] = drop_count.get(m["drop"], 0) + 1
-        m["confidence"] = learning.calibrate(m["raw_confidence"])
-        m["rationale"] = rationale(ctx, m, base_cats, dates, alerts)
-        m["add_name"], m["drop_name"] = ctx.name(m["add"]), ctx.name(m["drop"])
-        m["add_team"], m["drop_team"] = ctx.team_of(m["add"]), ctx.team_of(m["drop"])
-        m["add_games"] = len(sim.player_games(ctx, m["add"], dates))
-        m["drop_games"] = len(sim.player_games(ctx, m["drop"], dates))
-        m.pop("cats_after")
-        picked.append(m)
+        picked.append(describe(ctx, B, m))
         if len(picked) >= top:
             break
-    for m in picked:
-        m.update(urgency(ctx, m, mine, opp, dates, b, wtd_me, n_sims, seed))
     learning.log_suggestions(ctx, picked[:3])
-    return {"moves": picked, "base": {"week_win": base_win, "season_strength": base_season,
-                                      "effective_weeks": eff, "cat_probs": base_cats}}
+    return {"moves": picked, "screened": {"free_agents": len(adds), "drops": len(drops), "swaps": len(cands)},
+            "base": {"week_win": B["base_win"], "season_strength": B["base_season"],
+                     "effective_weeks": B["eff"], "cat_probs": B["base_cats"]}}
+
+
+def evaluate_add(ctx, pid, n_sims=3000, seed=11) -> dict:
+    """Should I pick up this specific player, and for whom? Scores him against every player
+    you could drop (not just your weakest four), with the same engine as the suggestions."""
+    owner = next((k for k, ids in ctx.rosters.items() if pid in ids), None)
+    out = {"nba_id": int(pid), "name": ctx.name(pid), "team": ctx.team_of(pid),
+           "owner": ctx.teams.get(owner, {}).get("name") if owner else None,
+           "injury": ctx.injuries.get(pid), "in_rotation": in_rotation(ctx, pid),
+           "per_game": float(ctx.values["value"].get(pid, 0)), "warnings": []}
+    if owner == ctx.my_key:
+        out["warnings"].append("He's already on your team.")
+        return dict(out, options=[], verdict="already yours")
+    if owner:
+        out["warnings"].append(f"He's on {out['owner']}: you'd need a trade (use the Trade lab).")
+    if not isinstance(ctx.team_of(pid), str):  # missing team comes back as None or NaN
+        out["warnings"].append("He isn't on an NBA roster right now (waived, unsigned or retired).")
+    elif not out["in_rotation"]:
+        out["warnings"].append("His team has played without him and there's no injury listed: he may be out of the rotation.")
+    if out["injury"]:
+        g = model._games_out(pid, ctx.injuries, ctx.events)
+        out["warnings"].append(f"Injury: {out['injury']['status']}" + (f", ~{g:.0f} games out" if g else "")
+                               + f". {out['injury']['comment'] or ''}")
+    B = baseline(ctx, n_sims, seed)
+    slots = sim.team_slots(ctx).get(ctx.my_key, {})
+    droppable = [d for d in B["mine"] if slots.get(d) not in ("IL", "IL+")]
+    opts = sorted((score_swap(ctx, B, pid, d) for d in droppable), key=lambda m: -m["score"])
+    for i, m in enumerate(opts):
+        describe(ctx, B, m, with_urgency=(i == 0))  # urgency is a few extra sims: best option only
+    best = opts[0] if opts else None
+    if owner:
+        verdict = "owned"
+    elif best is None or best["score"] <= 0.01:
+        verdict = "not worth it"
+    else:
+        verdict = best.get("urgency", "Marginal")
+    return dict(out, options=opts, verdict=verdict)
 
 
 URGENT_WAIT_COST = 0.02   # wins lost by waiting a day; ~2pp is just above simulation noise

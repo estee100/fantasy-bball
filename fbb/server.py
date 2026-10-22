@@ -467,3 +467,20 @@ def lineup_apply():
     res = lineup.apply_today(ctx)
     _manual_changed()
     return _json(res)
+
+
+
+# ---------------------------------------------------------------- pickup check
+
+class EvalIn(BaseModel):
+    nba_id: int
+
+
+@app.post("/api/evaluate")
+def evaluate(e: EvalIn):
+    ctx = pipeline.context()
+    if e.nba_id not in ctx.players.index:
+        raise HTTPException(404, "unknown player")
+    if not ctx.my_key:
+        raise HTTPException(400, "Set up your team first")
+    return _json(recommend.evaluate_add(ctx, e.nba_id))

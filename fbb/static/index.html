@@ -34,6 +34,7 @@
     <button role="tab" data-tab="roster">Rosters</button>
     <button role="tab" data-tab="league">League</button>
     <button role="tab" data-tab="news">News <span class="count" id="news-count"></span></button>
+    <button role="tab" data-tab="check">Pickup check</button>
     <button role="tab" data-tab="watch">Watchlist</button>
     <button role="tab" data-tab="trade">Trade lab</button>
     <button role="tab" data-tab="learning">Model &amp; learning</button>
@@ -120,6 +121,15 @@
         </div>
       </div>
     </div>
+  </section>
+
+  <!-- ======================================================= PICKUP CHECK -->
+  <section data-panel="check" class="hidden">
+    <div class="card">
+      <div class="hd"><h2>Should I pick him up?</h2><span class="sub">any player, scored against every player you could drop, with the same simulations as the suggestions</span></div>
+      <div class="bd"><div class="picker" id="check-picker"></div></div>
+    </div>
+    <div id="check-result" class="section-gap"></div>
   </section>
 
   <!-- ======================================================= WATCHLIST -->
