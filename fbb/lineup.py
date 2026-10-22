@@ -29,7 +29,9 @@ def slot_list() -> list:
 
 def parse_positions(text: str | None) -> set:
     out = set()
-    for tok in (text or "").replace("/", ",").replace("-", ",").split(","):
+    if not isinstance(text, str):  # blank in the database comes back as None or NaN
+        return out
+    for tok in text.replace("/", ",").replace("-", ",").split(","):
         t = tok.strip().upper()
         if t in ("PG", "SG", "SF", "PF", "C"):
             out.add(t)
