@@ -53,7 +53,7 @@ def refresh(daily=False) -> dict:
         _step(status, "game_logs", nba.ingest_logs, [config.SEASON])
         _step(status, "injuries", news.fetch_injuries)
         _step(status, "news", news.fetch_news)
-        if config.yahoo_configured():
+        if config.yahoo_authorized():
             from . import yahoo
             _step(status, "yahoo", yahoo.sync)
         elif not db.kv_get("league_source"):
@@ -143,8 +143,11 @@ def readiness() -> list:
         um = db.kv_get("unmatched_players", [])
         checks.append({"name": "Player matching", "ok": not um,
                        "detail": "all matched" if not um else "unmatched: " + ", ".join(um[:5])})
+    elif config.yahoo_configured():
+        checks.append({"name": "Yahoo rosters", "ok": False,
+                       "detail": "credentials set, not authorized yet: run `python -m fbb auth` in a terminal"})
     else:
-        checks.append({"name": "Yahoo rosters", "ok": False, "detail": "demo league: run `python -m fbb auth`"})
+        checks.append({"name": "Yahoo rosters", "ok": False, "detail": "demo league: add Yahoo credentials to .env"})
     checks.append({"name": "News extraction", "ok": bool(config.ANTHROPIC_KEY),
                    "detail": "Claude" if config.ANTHROPIC_KEY else "keyword tagger only (no ANTHROPIC_API_KEY)"})
     return checks

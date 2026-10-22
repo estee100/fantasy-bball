@@ -9,6 +9,13 @@ python -m fbb init      # download 3 seasons of NBA data + schedule (≈1 min)
 python -m fbb serve     # dashboard at http://127.0.0.1:8000, refreshes every 15 min
 ```
 
+To have it start hidden in the background every time you log in to Windows (no console
+window; logs in `data/server.log`):
+
+```
+python -m fbb autostart install    # undo with: python -m fbb autostart remove
+```
+
 Without Yahoo credentials it runs on a demo league (10 teams snake-drafted from real projections)
 so everything works before you connect.
 

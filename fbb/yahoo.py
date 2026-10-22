@@ -247,6 +247,13 @@ def parse_team_stats(raw) -> dict:
 def sync() -> dict:
     """Full sync. Detects your own roster changes and logs them for the learning loop."""
     q = query()
+    if db.kv_get("league_source") == "demo":
+        # the demo league's suggestions and forecasts would pollute calibration for the real one
+        with db.cursor() as c:
+            c.execute("DELETE FROM moves")
+            c.execute("DELETE FROM matchup_predictions")
+        db.kv_set("calibration", None)
+        db.kv_set("my_roster_last", None)
     info = sync_settings(q)
     before = db.kv_get("my_roster_last")
     r = sync_rosters(q)

@@ -36,6 +36,15 @@ def yahoo_configured() -> bool:
     return bool(YAHOO_KEY and YAHOO_SECRET and YAHOO_LEAGUE_ID)
 
 
+def yahoo_authorized() -> bool:
+    """True once `python -m fbb auth` has saved a token. Read from the file each time, so a
+    server started before you authorized picks it up without a restart. The background
+    server must never start the interactive login itself (it would open a browser tab
+    every refresh)."""
+    from dotenv import dotenv_values
+    return yahoo_configured() and bool(dotenv_values(ENV_PATH).get("YAHOO_REFRESH_TOKEN"))
+
+
 # Canonical stat keys used everywhere internally. Game logs store these columns.
 COUNT_STATS = ["min", "fgm", "fga", "fg3m", "fg3a", "ftm", "fta", "oreb", "dreb",
                "reb", "ast", "stl", "blk", "tov", "pts", "dd", "td"]

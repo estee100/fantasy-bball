@@ -16,6 +16,8 @@ def main():
     r.add_argument("--daily", action="store_true", help="also re-tune the model and re-scan reports")
     sub.add_parser("tune", help="re-tune projection parameters by walk-forward backtest")
     sub.add_parser("demo", help="(re)build the demo league")
+    au = sub.add_parser("autostart", help="start the dashboard hidden at Windows login")
+    au.add_argument("action", choices=["install", "remove"])
     s = sub.add_parser("serve", help="run the dashboard + scheduler")
     s.add_argument("--port", type=int, default=8000)
     a = ap.parse_args()
@@ -42,6 +44,9 @@ def main():
     elif a.cmd == "demo":
         from . import demo
         demo.build()
+    elif a.cmd == "autostart":
+        from . import autostart
+        {"install": autostart.install, "remove": autostart.remove}[a.action]()
     elif a.cmd == "serve":
         import uvicorn
         uvicorn.run("fbb.server:app", host="127.0.0.1", port=a.port)
