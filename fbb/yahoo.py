@@ -310,8 +310,10 @@ def sync() -> dict:
         sync_matchups(q, r["my_key"], info["week"])
         now = r["rosters"].get(r["my_key"], [])
         if before is not None and set(before) != set(now):
-            from . import sim
-            learning.record_roster_change(sim.load_context(), before, now)
+            from . import history, sim
+            ctx = sim.load_context()
+            history.record(ctx, "roster change", [p for p in now if p not in before],
+                           [p for p in before if p not in now], source="yahoo")
         db.kv_set("my_roster_last", now)
     db.kv_set("yahoo_synced", db.now_iso())
     return dict(info, my_key=r["my_key"], unmatched=db.kv_get("unmatched_players", []))

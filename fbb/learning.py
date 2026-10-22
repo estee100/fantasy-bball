@@ -135,6 +135,12 @@ def update_calibration():
         s = by_status.setdefault(r["status"], {"n": 0, "hits": 0})
         s["n"] += 1
         s["hits"] += hit
+    from . import history
+    for raw, hit in history.calibration_pairs():  # moves you made yourself, scored the same way
+        for b in bins:
+            if b["lo"] <= raw < b["hi"]:
+                b["n"] += 1
+                b["hits"] += hit
     db.kv_set("calibration", {"bins": bins, "by_status": by_status, "n": len(rows)})
 
 

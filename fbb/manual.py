@@ -116,7 +116,12 @@ def set_team(name: str, text: str, mine: bool = False, ctx=None) -> dict:
         before = db.kv_get("my_roster_last")
         now = [pid for pid, _ in players]
         if before is not None and set(before) != set(now) and ctx is not None:
-            learning.record_roster_change(ctx, before, now)
+            # one entry for the whole change: with several adds and drops, any 1-for-1 pairing
+            # would be a guess. Its date can be corrected in History if it happened earlier.
+            from . import history
+            ctx.rosters[ctx.my_key] = now
+            history.record(ctx, "roster change", [p for p in now if p not in before],
+                           [p for p in before if p not in now], source="paste")
         db.kv_set("my_roster_last", now)
     return {"team_key": key, "players": len(players),
             "unmatched": unmatched_candidates(text, [p for p, _ in players])}
@@ -164,7 +169,8 @@ def _touch(key):
     db.kv_set("manual_updated", updated)
 
 
-def edit_roster(key: str, add: int | None = None, drop: int | None = None, slot: str = "BN", ctx=None) -> dict:
+def edit_roster(key: str, add: int | None = None, drop: int | None = None, slot: str = "BN", ctx=None,
+                note: str = "") -> dict:
     """Add and/or drop one player on a team. On your own team, an add+drop pair is logged
     to the move ledger like any roster change, so it gets scored."""
     with db.cursor() as c:
@@ -188,11 +194,11 @@ def edit_roster(key: str, add: int | None = None, drop: int | None = None, slot:
         if add is not None:
             c.execute("INSERT INTO rosters VALUES (?,?,?)", (key, add, slot))
     _touch(key)
-    if team["is_mine"]:
-        after = [p for p in before if p != drop] + ([add] if add is not None else [])
-        if ctx is not None and add is not None and drop is not None:
-            learning.record_roster_change(ctx, before, after)
-        db.kv_set("my_roster_last", after)
+    if team["is_mine"] and ctx is not None and (add is not None or drop is not None):
+        from . import history
+        kind = "add/drop" if add is not None and drop is not None else ("add" if add is not None else "drop")
+        history.record(ctx, kind, [add] if add is not None else [], [drop] if drop is not None else [],
+                       source="editor", note=note)
     return {"ok": True}
 
 

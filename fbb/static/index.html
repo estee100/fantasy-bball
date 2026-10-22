@@ -37,6 +37,7 @@
     <button role="tab" data-tab="check">Pickup check</button>
     <button role="tab" data-tab="watch">Watchlist</button>
     <button role="tab" data-tab="trade">Trade lab</button>
+    <button role="tab" data-tab="history">History</button>
     <button role="tab" data-tab="learning">Model &amp; learning</button>
     <button role="tab" data-tab="setup">League setup</button>
   </nav>
@@ -154,6 +155,37 @@
     </div>
     <div style="margin-top:12px"><button class="btn primary" id="trade-btn" disabled>Evaluate trade</button></div>
     <div class="card section-gap hidden" id="trade-result"></div>
+  </section>
+
+  <!-- ======================================================= HISTORY -->
+  <section data-panel="history" class="hidden">
+    <div class="grid cols-2">
+      <div class="card">
+        <div class="hd"><h2>Record a move</h2><span class="sub">anything you did in Yahoo that the app didn't see, including from your phone</span></div>
+        <div class="bd" style="display:grid;gap:10px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <select id="tx-kind" class="btn"><option value="add/drop">Add / drop</option><option value="add">Add only</option><option value="drop">Drop only</option><option value="trade">Trade</option></select>
+            <label class="small">Happened on <input type="date" id="tx-date" class="btn" style="cursor:text"></label>
+            <select id="tx-other" class="btn hidden"></select>
+          </div>
+          <div class="grid cols-2-even">
+            <div><div class="small ink2" style="margin-bottom:4px" id="tx-in-label">You got</div><div class="picker" id="tx-in"></div></div>
+            <div><div class="small ink2" style="margin-bottom:4px">You gave up / dropped</div><div class="picker" id="tx-out"></div></div>
+          </div>
+          <input id="tx-note" class="btn" style="cursor:text" placeholder="Note (optional): why you did it">
+          <div style="display:flex;gap:8px;align-items:center"><button class="btn primary" id="tx-save">Record</button><span class="small muted" id="tx-status"></span></div>
+          <div class="small muted">Scored from the date you pick, so entering a move a few days late is fine. In manual mode this also updates the rosters.</div>
+        </div>
+      </div>
+      <div class="card" style="align-self:start">
+        <div class="hd"><h2>Scorecard</h2><span class="sub">finished moves, judged on what happened after</span></div>
+        <div class="bd" id="tx-score"></div>
+      </div>
+    </div>
+    <div class="card section-gap">
+      <div class="hd"><h2>Timeline</h2><span class="sub">every roster change and weekly result</span></div>
+      <div class="bd" id="tx-list"></div>
+    </div>
   </section>
 
   <!-- ======================================================= LEARNING -->

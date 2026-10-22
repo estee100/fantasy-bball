@@ -280,3 +280,14 @@ section[data-panel="setup"] { max-width: 1320px; margin: 0 auto; padding: 20px; 
 .editor-row { display: grid; grid-template-columns: 90px 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--grid); }
 .editor-row:last-child { border-bottom: 0; }
 .editor-row select, select.btn { padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; }
+
+/* ------------------------------------------------------------------ history */
+.tx { display: grid; grid-template-columns: 92px 1fr auto; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--grid); align-items: start; }
+.tx:last-child { border-bottom: 0; }
+.tx .when { font-size: 12px; color: var(--ink-2); }
+.tx .players { display: grid; gap: 3px; font-size: 13px; }
+.tx .in { color: var(--good-text); } .tx .out { color: var(--critical); }
+.tx .res { text-align: right; min-width: 170px; font-size: 12px; }
+.tx .res b { font-size: 16px; display: block; }
+.tx.week { grid-template-columns: 92px 1fr auto; }
+@media (max-width: 640px) { .tx { grid-template-columns: 1fr; } .tx .res { text-align: left; } }

@@ -237,8 +237,10 @@ def move_status(move_id: int, s: StatusIn):
         with db.cursor() as c:
             mv = c.execute("SELECT add_id, drop_id FROM moves WHERE id=?", (move_id,)).fetchone()
         if mv and ctx.my_key:
+            from . import history
             try:
-                manual.edit_roster(ctx.my_key, add=mv["add_id"], drop=mv["drop_id"], slot="BN")
+                history.record(ctx, "add/drop", [mv["add_id"]], [mv["drop_id"]], source="suggestion",
+                               move_id=move_id, apply=True)
                 applied = True
             except ValueError as e:
                 raise HTTPException(400, str(e))
@@ -484,3 +486,63 @@ def evaluate(e: EvalIn):
     if not ctx.my_key:
         raise HTTPException(400, "Set up your team first")
     return _json(recommend.evaluate_add(ctx, e.nba_id))
+
+
+
+# ---------------------------------------------------------------- transaction history
+
+class TxIn(BaseModel):
+    kind: str                 # add | drop | add/drop | trade
+    ins: list[int] = []
+    outs: list[int] = []
+    effective: str | None = None
+    other_key: str | None = None
+    note: str = ""
+
+
+class TxEdit(BaseModel):
+    effective: str | None = None
+    note: str | None = None
+
+
+@app.get("/api/history")
+def history_get():
+    from . import history
+    return _json(history.report(pipeline.context()))
+
+
+@app.post("/api/history")
+def history_add(t: TxIn):
+    from . import history
+    if t.kind not in ("add", "drop", "add/drop", "trade"):
+        raise HTTPException(400, "kind must be add, drop, add/drop or trade")
+    if t.kind == "trade" and not (t.ins and t.outs and t.other_key):
+        raise HTTPException(400, "A trade needs players both ways and the other team")
+    if not (t.ins or t.outs):
+        raise HTTPException(400, "Pick at least one player")
+    if t.effective and t.effective > date.today().isoformat():
+        raise HTTPException(400, "The date can't be in the future")
+    ctx = pipeline.context()
+    try:
+        tid = history.record(ctx, t.kind, t.ins, t.outs, t.effective, t.other_key, source="manual",
+                             note=t.note, apply=db.kv_get("league_source") == "manual")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    history.evaluate(pipeline.context(reload=True))
+    _manual_changed()
+    return {"ok": True, "id": tid}
+
+
+@app.post("/api/history/{tid}")
+def history_edit(tid: int, e: TxEdit):
+    from . import history
+    history.update(tid, e.effective, e.note)
+    history.evaluate(pipeline.context())
+    return {"ok": True}
+
+
+@app.delete("/api/history/{tid}")
+def history_delete(tid: int):
+    from . import history
+    history.delete(tid)
+    return {"ok": True}

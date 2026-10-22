@@ -47,6 +47,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#team-btn").addEventListener("click", importTeam);
   initWatchPicker();
   initCheckPicker();
+  initHistoryForm();
   $("#edit-team").addEventListener("change", () => loadEditor($("#edit-team").value));
   initTrade();
   initTips();
@@ -80,6 +81,7 @@ function showTab(tab) {
   if (tab === "learning") loadLearning();
   if (tab === "setup") loadSetup();
   if (tab === "watch") loadWatch();
+  if (tab === "history") loadHistory();
 }
 
 async function load() {
@@ -1090,4 +1092,112 @@ async function checkPlayer(pid) {
     b.textContent = r.ok ? "Done: logged" : (d.detail || "failed"); b.disabled = true;
     if (r.ok) afterManualChange();
   }));
+}
+
+/* ------------------------------------------------------------------ history */
+const tx = { ins: [], outs: [] };
+function txPicker(el, side, scope) {
+  el.innerHTML = `<input placeholder="Search…"><div class="opts card hidden"></div><div class="picked"></div>`;
+  const input = $("input", el), opts = $(".opts", el);
+  let t;
+  input.addEventListener("input", () => {
+    clearTimeout(t);
+    t = setTimeout(async () => {
+      if (input.value.trim().length < 2) { opts.classList.add("hidden"); return; }
+      const hits = await api(`/api/players/search?q=${encodeURIComponent(input.value.trim())}&scope=${scope()}`);
+      opts.innerHTML = hits.map((h) => `<div class="opt" data-id="${h.nba_id}" data-name="${esc(h.name)}"><span><b>${esc(h.name)}</b> <span class="pteam">${esc(h.team || "")}</span></span><span class="muted small">${esc(h.owner)}</span></div>`).join("") || `<div class="opt muted">No match</div>`;
+      opts.classList.remove("hidden");
+      $$(".opt[data-id]", opts).forEach((o) => o.addEventListener("click", () => {
+        if (!tx[side].some((x) => x.id === +o.dataset.id)) tx[side].push({ id: +o.dataset.id, name: o.dataset.name });
+        input.value = ""; opts.classList.add("hidden"); renderTxPicked();
+      }));
+    }, 200);
+  });
+  input.addEventListener("blur", () => setTimeout(() => opts.classList.add("hidden"), 200));
+}
+
+function renderTxPicked() {
+  [["ins", "#tx-in"], ["outs", "#tx-out"]].forEach(([side, sel]) => {
+    $(`${sel} .picked`).innerHTML = tx[side].map((p, i) => `<span class="chip" data-i="${i}" title="Remove">${esc(p.name)} ✕</span>`).join("");
+    $$(`${sel} .picked .chip`).forEach((c) => c.addEventListener("click", () => { tx[side].splice(+c.dataset.i, 1); renderTxPicked(); }));
+  });
+}
+
+function initHistoryForm() {
+  $("#tx-date").value = new Date().toISOString().slice(0, 10);
+  $("#tx-date").max = $("#tx-date").value;
+  txPicker($("#tx-in"), "ins", () => "others");
+  txPicker($("#tx-out"), "outs", () => "mine");
+  $("#tx-kind").addEventListener("change", async () => {
+    const trade = $("#tx-kind").value === "trade";
+    $("#tx-other").classList.toggle("hidden", !trade);
+    $("#tx-in-label").textContent = trade ? "You got (from the other team)" : "You got";
+    if (trade && !$("#tx-other").options.length) {
+      const m = await api("/api/manual").catch(() => null);
+      const teams = (m?.teams || S?.league_table || []).filter((t) => !t.is_mine);
+      $("#tx-other").innerHTML = `<option value="">Other team…</option>` + teams.map((t) => `<option value="${esc(t.team_key)}">${esc(t.name)}</option>`).join("");
+    }
+  });
+  $("#tx-save").addEventListener("click", async () => {
+    const st = $("#tx-status");
+    const body = { kind: $("#tx-kind").value, ins: tx.ins.map((p) => p.id), outs: tx.outs.map((p) => p.id),
+      effective: $("#tx-date").value, other_key: $("#tx-other").value || null, note: $("#tx-note").value };
+    st.textContent = "Recording…";
+    const r = await fetch("/api/history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) { st.textContent = d.detail || "Failed"; return; }
+    st.textContent = "Recorded."; tx.ins = []; tx.outs = []; $("#tx-note").value = ""; renderTxPicked();
+    loadHistory(); afterManualChange();
+  });
+}
+
+async function loadHistory() {
+  const H = await api("/api/history");
+  const unit = H.unit === "fantasy pts" ? "pts" : "value";
+  const sc = H.scorecard;
+  const line = (lbl, x) => `<div class="setting-row" style="grid-template-columns:1fr auto"><span>${lbl}</span><span class="num">${x.n ? `<b>${x.hits}/${x.n}</b> worked · net ${signed(x.net, 0)} ${unit}` : '<span class="muted">none finished yet</span>'}</span></div>`;
+  $("#tx-score").innerHTML = line("Your own calls", sc.your_calls) + line("Suggestions you followed", sc.followed_suggestions) +
+    `<div class="small muted" style="margin-top:8px">A move "worked" if the players you got outscored the players you gave up over the next 21 days (28 for trades). Your own calls also feed the model's confidence calibration.</div>`;
+  const SRC = { manual: "you entered", editor: "roster editor", paste: "re-paste", suggestion: "followed a suggestion", yahoo: "Yahoo" };
+  const items = H.items.map((t) => ({ date: t.effective, html: txCard(t, unit, SRC) }));
+  const weeks = H.weeks.filter((w) => w.result != null || w.win_prob != null).map((w) => ({ date: "", week: w.week, html: `<div class="tx week">
+      <div class="when">Week ${w.week}</div>
+      <div>vs <b>${esc(w.opponent || "?")}</b> <span class="muted small">· forecast ${pct(w.win_prob)} to win</span></div>
+      <div class="res">${w.result == null ? '<span class="muted">in progress</span>' : `<span class="status ${w.result === 1 ? "st-good" : w.result === 0 ? "st-critical" : "st-warning"}"><span class="dot"></span>${w.result === 1 ? "Won" : w.result === 0 ? "Lost" : "Tied"}</span>`}</div></div>` }));
+  const el = $("#tx-list");
+  el.innerHTML = (items.length || weeks.length) ? [...weeks, ...items].map((x) => x.html).join("")
+    : `<div class="empty">Nothing yet. Moves you make show up here: from the roster editor, re-pastes, suggestions you follow, or the form above.</div>`;
+  $$("#tx-list [data-txdate]").forEach((i) => i.addEventListener("change", async () => {
+    await api(`/api/history/${i.dataset.txdate}`, { method: "POST", body: JSON.stringify({ effective: i.value }) }); loadHistory();
+  }));
+  $$("#tx-list [data-txdel]").forEach((b) => b.addEventListener("click", async () => {
+    if (!confirm("Remove this entry from history? (Rosters aren't changed.)")) return;
+    await fetch(`/api/history/${b.dataset.txdel}`, { method: "DELETE" }); loadHistory();
+  }));
+  bindPlayerLinks(el);
+}
+
+function txCard(t, unit, SRC) {
+  const p = t.prediction || {}, e = t.eval;
+  const kind = { "add/drop": "Add / drop", add: "Add", drop: "Drop", trade: "Trade", "roster change": "Roster change" }[t.kind] || t.kind;
+  const said = p.score != null ? `model: ${signed(p.score, 2)} wins${p.confidence != null ? `, ${pct(p.confidence)} confident` : ""}`
+    : p.season_dwins != null ? `model: ${signed(p.season_dwins, 2)} wins ROS` : "";
+  const pg = p.per_game_diff != null ? `${signed(p.per_game_diff, 1)} ${unit}/game at the time` : "";
+  let res = '<span class="muted">no games yet</span>';
+  if (e && (e.games_in || e.games_out)) {
+    const ok = e.diff > 0;
+    res = `<b class="num ${ok ? "delta-up" : "delta-down"}">${signed(e.diff, 1)} ${unit}</b>
+      ${fmt(e.in, 0)} in (${e.games_in} g) vs ${fmt(e.out, 0)} out (${e.games_out} g)<br>
+      ${e.final ? `<span class="status ${ok ? "st-good" : "st-critical"}"><span class="dot"></span>${ok ? "Worked" : "Didn't work"}</span>` : `<span class="muted">so far · final ${esc(shortDate(e.horizon_end))}</span>`}`;
+  }
+  return `<div class="tx">
+    <div class="when"><input type="date" value="${esc(t.effective)}" max="${new Date().toISOString().slice(0, 10)}" data-txdate="${t.id}" class="btn" style="padding:2px 4px;font-size:11px;cursor:text" title="When it happened (change to re-score)">
+      <div style="margin-top:4px"><span class="chip">${esc(kind)}</span></div></div>
+    <div class="players">
+      ${t.in.map((x) => `<div class="in">+ <a href="#" data-pid="${x.nba_id}">${esc(x.name)}</a> <span class="pteam">${esc(x.team || "")}</span></div>`).join("")}
+      ${t.out.map((x) => `<div class="out">− <a href="#" data-pid="${x.nba_id}">${esc(x.name)}</a> <span class="pteam">${esc(x.team || "")}</span></div>`).join("")}
+      <div class="small muted">${esc(SRC[t.source] || t.source)}${t.other_team ? ` · with ${esc(t.other_team)}` : ""}${said ? ` · ${esc(said)}` : ""}${pg ? ` · ${esc(pg)}` : ""}${t.note ? ` · "${esc(t.note)}"` : ""}</div>
+    </div>
+    <div class="res">${res}<div><button class="btn ghost small" data-txdel="${t.id}" style="margin-top:6px">Remove</button></div></div>
+  </div>`;
 }
