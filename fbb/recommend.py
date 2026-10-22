@@ -219,6 +219,18 @@ def urgency(ctx, m, mine, opp, dates, b, wtd_me, n_sims, seed) -> dict:
     return {"urgency": label, "urgency_reason": reason, "wait_cost": wait_cost}
 
 
+def best_free_agents(ctx, n=20) -> list:
+    """Free agents who can actually play for you (on an NBA roster, in the rotation), best first.
+    The one list every roster-filling step uses: an unfiltered list once filled a trade's open
+    spot with a waived player (Kevin Porter Jr.) and flipped a +0.61 trade to -0.15."""
+    if "_best_fa" not in ctx._pools:
+        rostered = ctx.rostered()
+        ctx._pools["_best_fa"] = sorted(
+            [p for p in ctx.proj.index if p not in rostered and isinstance(ctx.team_of(p), str) and in_rotation(ctx, p)],
+            key=lambda p: -ros_value(ctx, p))[:max(n, 20)]
+    return ctx._pools["_best_fa"][:n]
+
+
 def in_rotation(ctx, pid) -> bool:
     """False for a player whose NBA team has played this season but who hasn't appeared,
     with no injury to explain it: waived, out of the rotation, or away from the team.
@@ -309,8 +321,7 @@ def evaluate_trade(ctx, give: list, get: list) -> dict:
     other_key = next(iter(owners), None)   # None = they're free agents
     theirs = ctx.rosters.get(other_key, [])
     rostered = ctx.rostered()
-    fa = sorted([p for p in ctx.proj.index if p not in rostered and p in ctx.players.index],
-                key=lambda p: -ros_value(ctx, p))
+    fa = best_free_agents(ctx)
 
     def fix_size(r):
         r = list(r)

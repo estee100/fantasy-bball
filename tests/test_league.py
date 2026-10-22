@@ -221,3 +221,31 @@ def test_alerts_off_by_default_and_titles_ascii(ctx, outbox):
     assert alerts.settings()["enabled"] is False
     assert alerts.run(ctx)["reason"] == "disabled"
     assert alerts._ascii("Luka Dončić: Out") == "Luka Doncic: Out"
+
+
+# ---------------------------------------------------------------- trade finder
+
+def test_trade_finder_results_are_consistent(ctx):
+    from fbb import trades
+    R = trades.find(ctx, limit=6)
+    assert R["evaluated"] > 0
+    mine = set(ctx.rosters[ctx.my_key])
+    per_team = {}
+    for t in R["trades"]:
+        assert t["my_dwins"] >= trades.MIN_GAIN and t["their_dwins"] >= -trades.MAX_THEIR_LOSS
+        assert all(x["nba_id"] in mine for x in t["give"])
+        assert all(x["nba_id"] in ctx.rosters[t["other_key"]] for x in t["get"])
+        per_team[t["other_key"]] = per_team.get(t["other_key"], 0) + 1
+    assert all(n <= 2 for n in per_team.values())
+
+
+def test_trade_finder_and_evaluator_agree(ctx):
+    """Regression: the evaluator once filled open roster spots from an unfiltered free-agent list
+    (a waived player), so the same trade scored +0.61 in the finder and -0.15 in the evaluator."""
+    from fbb import recommend, trades
+    R = trades.find(ctx, limit=3)
+    for t in R["trades"]:
+        e = recommend.evaluate_trade(ctx, [x["nba_id"] for x in t["give"]], [x["nba_id"] for x in t["get"]])
+        assert e["my_dwins"] == pytest.approx(t["my_dwins"], abs=1e-6)
+    for p in recommend.best_free_agents(ctx):
+        assert isinstance(ctx.team_of(p), str)

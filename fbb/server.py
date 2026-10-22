@@ -625,3 +625,34 @@ def alerts_test():
     if not ok:
         raise HTTPException(502, "Couldn't reach ntfy.sh")
     return {"ok": True}
+
+
+
+# ---------------------------------------------------------------- trade finder (runs in the background)
+
+_trade_job = {"running": False, "done": 0, "total": 0, "result": None, "error": None, "at": None}
+
+
+@app.post("/api/trades/find")
+def trades_find():
+    import threading
+    from . import trades
+    if _trade_job["running"]:
+        return {"running": True}
+
+    def work():
+        _trade_job.update(running=True, done=0, total=0, error=None)
+        try:
+            res = trades.find(pipeline.context(), progress=lambda d, t: _trade_job.update(done=d, total=t))
+            _trade_job.update(result=res, at=db.now_iso())
+        except Exception as e:  # surface it in the UI instead of failing silently
+            _trade_job["error"] = f"{type(e).__name__}: {e}"
+        finally:
+            _trade_job["running"] = False
+    threading.Thread(target=work, daemon=True).start()
+    return {"running": True}
+
+
+@app.get("/api/trades/find")
+def trades_status():
+    return _json(_trade_job)

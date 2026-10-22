@@ -586,6 +586,7 @@ function initTrade() {
     input.addEventListener("blur", () => setTimeout(() => opts.classList.add("hidden"), 200));
   });
   $("#trade-btn").addEventListener("click", evalTrade);
+  $("#tf-run").addEventListener("click", runTradeFinder);
 }
 
 function renderPicked() {
@@ -1337,4 +1338,57 @@ function renderAlertSettings(A) {
     if (!confirm("Make a new channel name? You'll need to re-subscribe in the ntfy app.")) return;
     renderAlertSettings(await api("/api/alerts", { method: "POST", body: JSON.stringify({ new_topic: true }) }));
   });
+}
+
+/* ------------------------------------------------------------------ trade finder */
+async function runTradeFinder() {
+  const out = $("#tf-out"), btn = $("#tf-run");
+  btn.disabled = true;
+  await api("/api/trades/find", { method: "POST" });
+  let st;
+  for (let i = 0; i < 240; i++) {
+    st = await api("/api/trades/find");
+    out.innerHTML = `<div class="small muted">Searching… ${st.total ? `${st.done} of ${st.total} candidate trades evaluated` : "screening every combination"}</div>
+      <div class="meter"><span style="width:${st.total ? (st.done / st.total) * 100 : 3}%"></span></div>`;
+    if (!st.running && (st.result || st.error)) break;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  btn.disabled = false;
+  if (st.error) { out.innerHTML = `<div class="note" style="border-left:3px solid var(--critical)">${esc(st.error)}</div>`; return; }
+  renderTradeFinder(st.result);
+}
+
+const STAT_LBL = { pts: "scoring", reb: "rebounds", ast: "assists", stl: "steals", blk: "blocks", tov: "turnovers" };
+function renderTradeFinder(R) {
+  const out = $("#tf-out");
+  if (!R.trades.length) { out.innerHTML = `<div class="empty">No trade found that helps you without hurting them (${R.evaluated} checked).</div>`; return; }
+  const pl = (x) => `<a href="#" data-pid="${x.nba_id}">${esc(x.name)}</a> <span class="pteam">${esc(x.team || "")} · ${fmt(x.per_game, 1)}</span>${x.status ? ` <span class="status st-warning" title="${esc(x.note || "")}"><span class="dot"></span>${esc(x.status)}</span>` : ""}`;
+  out.innerHTML = `<div class="small muted" style="margin-bottom:8px">${R.qualifying} of ${R.evaluated} evaluated trades qualify; best ${R.trades.length} shown (at most 2 per team). Numbers are fantasy pts/game.</div>` +
+    R.trades.map((t, i) => {
+      const shift = Object.entries(t.stat_shift).filter(([, v]) => Math.abs(v) >= 1).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 3)
+        .map(([k, v]) => `${STAT_LBL[k] || k} ${signed(v, 1)}`).join(", ");
+      return `<div class="move" style="margin-bottom:8px">
+        <div class="swap" style="display:grid;gap:4px">
+          <div><span class="chip">${esc(t.shape)}</span> with <b>${esc(t.other_team)}</b></div>
+          <div class="add"><span class="sign">+</span> ${t.get.map(pl).join(" &nbsp; ")}</div>
+          <div class="drop"><span class="sign">−</span> ${t.give.map(pl).join(" &nbsp; ")}</div>
+        </div>
+        <div class="nums num">
+          <div><b class="delta-up">${signed(t.my_dwins, 2)}</b><span>wins for you</span></div>
+          <div><b>${signed(t.their_dwins, 2)}</b><span>for them</span></div>
+        </div>
+        <ul>${shift ? `<li>Per game: ${esc(shift)}</li>` : ""}
+          ${t.auto_filled.length ? `<li>Frees a roster spot: best free agent added (${esc(t.auto_filled.join(", "))})</li>` : ""}
+          ${t.auto_dropped.length ? `<li>Roster limit: you'd drop ${esc(t.auto_dropped.join(", "))}</li>` : ""}</ul>
+        <div class="actions"><button class="btn small" data-tf="${i}">Open in the evaluator below</button></div>
+      </div>`;
+    }).join("");
+  bindPlayerLinks(out);
+  $$("[data-tf]", out).forEach((b) => b.addEventListener("click", () => {
+    const t = R.trades[+b.dataset.tf];
+    trade.give = t.give.map((x) => ({ id: x.nba_id, name: x.name }));
+    trade.get = t.get.map((x) => ({ id: x.nba_id, name: x.name }));
+    renderPicked(); evalTrade();
+    $("#trade-result").scrollIntoView({ behavior: "smooth" });
+  }));
 }
