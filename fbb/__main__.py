@@ -34,7 +34,16 @@ def main():
             print("No Yahoo credentials yet: built a demo league so the dashboard works.")
     elif a.cmd in ("auth", "sync"):
         from . import yahoo
-        print(json.dumps(yahoo.sync(), indent=2, default=str))
+        try:
+            print(json.dumps(yahoo.sync(), indent=2, default=str))
+        except Exception as e:
+            print(f"\nSync failed: {type(e).__name__}: {e}\n\nDiagnostics (paste these back):")
+            try:
+                for name, result in yahoo.diagnose(yahoo.query()):
+                    print(f"  - {name}: {result}")
+            except Exception as d:
+                print(f"  could not run diagnostics: {type(d).__name__}: {d}")
+            raise SystemExit(1)
     elif a.cmd == "refresh":
         from . import pipeline
         print(json.dumps(pipeline.refresh(daily=a.daily), indent=2, default=str))

@@ -244,6 +244,40 @@ def parse_team_stats(raw) -> dict:
     return out
 
 
+def diagnose(q) -> list:
+    """Probe what the current token can do. Used when the first sync fails, to tell an invalid
+    token apart from a token without fantasy scope or a league-access problem."""
+    import base64
+    import json as _json
+    out = []
+    tok = getattr(q.oauth, "access_token", "") or ""
+    parts = tok.split(".")
+    if len(parts) == 3:  # JWT: scopes are readable without calling anything
+        try:
+            pad = parts[1] + "=" * (-len(parts[1]) % 4)
+            claims = _json.loads(base64.urlsafe_b64decode(pad))
+            out.append(("token claims", {k: claims.get(k) for k in ("scope", "scp", "aud", "exp") if k in claims}
+                        or sorted(claims)))
+        except ValueError as e:
+            out.append(("token claims", f"not decodable: {e}"))
+    else:
+        out.append(("token format", f"opaque ({len(tok)} chars), scopes not visible locally"))
+    probes = [
+        ("account (OpenID userinfo)", "https://api.login.yahoo.com/openid/v1/userinfo"),
+        ("fantasy: your games", "https://fantasysports.yahooapis.com/fantasy/v2/users;use_login=1/games"),
+        ("fantasy: NBA game", "https://fantasysports.yahooapis.com/fantasy/v2/game/nba"),
+        ("fantasy: your NBA leagues", "https://fantasysports.yahooapis.com/fantasy/v2/users;use_login=1/games;game_codes=nba/leagues"),
+    ]
+    for name, url in probes:
+        try:
+            r = q.oauth.session.get(url, params={"format": "json"})
+            body = " ".join(r.text[:300].split())
+            out.append((name, f"HTTP {r.status_code}: {body}"))
+        except Exception as e:  # report every probe, whatever goes wrong
+            out.append((name, f"request failed: {type(e).__name__}: {e}"))
+    return out
+
+
 def sync() -> dict:
     """Full sync. Detects your own roster changes and logs them for the learning loop."""
     q = query()
