@@ -1419,7 +1419,10 @@ async function importFa(append) {
   const r = await fetch("/api/free-agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, append }) });
   const d = await r.json();
   if (!r.ok) { st.textContent = d.detail || "Import failed"; return; }
-  const bits = [`${d.added_now} players imported ${d.appended ? "and added to the list" : "as a new list"}: ${d.players} players now, ${d.on_waivers} on waivers. Next page: click Next 25 in Yahoo, copy, paste, Import page.`];
+  const dup = d.appended && d.new === 0;
+  const bits = [dup
+    ? `All ${d.added_now} players were already on the list: that's the same page again. In Yahoo, click Next 25, wait for the names to change, then copy.`
+    : `${d.added_now} players read, ${d.new} new ${d.appended ? "added to the list" : "(new list)"}: ${d.players} players now, ${d.on_waivers} on waivers. Next page: click Next 25 in Yahoo, copy, paste, Import page.`];
   if (d.removed_from_outdated_rosters.length) bits.push(`Removed from outdated pasted rosters: ${d.removed_from_outdated_rosters.join(", ")}.`);
   if (d.listed_but_on_your_roster.length) bits.push(`On your roster but listed as available (did you drop them?): ${d.listed_but_on_your_roster.join(", ")}.`);
   if (d.unmatched.length) bits.push(`Couldn't match: ${d.unmatched.join(", ")}.`);

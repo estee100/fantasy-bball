@@ -93,7 +93,8 @@ def import_list(text: str, append=None) -> dict:
                     # Yahoo's list is newer than that team's paste: they must have dropped him
                     c.execute("DELETE FROM rosters WHERE team_key=? AND nba_id=?", (r["team_key"], p["nba_id"]))
                     cleaned.append(f"{pnames.get(p['nba_id'])} (was on {team})")
-    return {"players": len(merged), "added_now": len(players), "appended": append,
+    new_ids = {str(p["nba_id"]) for p in players} - set(prev)
+    return {"players": len(merged), "added_now": len(players), "new": len(new_ids), "appended": append,
             "on_waivers": sum(1 for p in merged.values() if p["status"] == "W"), "unmatched": unmatched,
             "removed_from_outdated_rosters": cleaned, "listed_but_on_your_roster": on_mine}
 
