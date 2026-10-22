@@ -18,7 +18,12 @@ INACTIVE_SLOTS = {"BN", "IL", "IL+", "NA"}
 
 
 def query():
+    import yahoo_oauth.oauth
     from yfpy.query import YahooFantasySportsQuery
+    # yfpy doesn't expose the redirect URI and yahoo_oauth defaults to "oob", which Yahoo's
+    # current app form won't accept. Yahoo rejects logins whose redirect URI doesn't match
+    # the registered one exactly, so point the library at the configured value.
+    yahoo_oauth.oauth.CALLBACK_URI = config.YAHOO_REDIRECT_URI
     if not config.yahoo_configured():
         raise RuntimeError("Set YAHOO_CONSUMER_KEY, YAHOO_CONSUMER_SECRET and YAHOO_LEAGUE_ID in .env")
     return YahooFantasySportsQuery(

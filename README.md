@@ -15,13 +15,16 @@ so everything works before you connect.
 ## Connect your Yahoo league
 
 1. Create an app at <https://developer.yahoo.com/apps/create/>
-   - Application type: **Installed Application**
-   - Redirect URI: `oob`
+   - Homepage URL: `https://localhost:8080` (required by the form, never visited)
+   - Redirect URI: `https://localhost:8080` (must match `YAHOO_REDIRECT_URI` in `.env`)
+   - OAuth client type: **Confidential Client**
    - API permissions: **Fantasy Sports → Read**
 2. `cp .env.example .env` and fill in `YAHOO_CONSUMER_KEY`, `YAHOO_CONSUMER_SECRET`, and
    `YAHOO_LEAGUE_ID` (the number in `basketball.fantasysports.yahoo.com/nba/<LEAGUE_ID>`).
-3. `python -m fbb auth` opens a browser; approve, paste the code back. The token is saved to
-   `.env` and refreshed automatically after that.
+3. `python -m fbb auth` opens a browser; click Agree. Yahoo then redirects to
+   `https://localhost:8080/?code=...`, which shows a "can't connect" error. That's expected:
+   copy the `code` value from the address bar and paste it into the terminal. The token is
+   saved to `.env` and refreshed automatically after that.
 4. Optional: set `ANTHROPIC_API_KEY` so news and scouting reports are read by Claude
    (otherwise a keyword tagger handles news and scouting ingestion is off).
 

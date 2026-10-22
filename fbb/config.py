@@ -14,6 +14,8 @@ load_dotenv(ENV_PATH)
 YAHOO_KEY = os.getenv("YAHOO_CONSUMER_KEY", "")
 YAHOO_SECRET = os.getenv("YAHOO_CONSUMER_SECRET", "")
 YAHOO_LEAGUE_ID = os.getenv("YAHOO_LEAGUE_ID", "")
+# Must match the Redirect URI registered on the Yahoo app exactly
+YAHOO_REDIRECT_URI = os.getenv("YAHOO_REDIRECT_URI", "https://localhost:8080")
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 SEASON = os.getenv("NBA_SEASON", "2026-27")
 PRIOR_SEASON = os.getenv("NBA_PRIOR_SEASON", "2025-26")
