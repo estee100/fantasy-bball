@@ -69,7 +69,12 @@ def ingest_player_directory() -> int:
     df = commonallplayers.CommonAllPlayers(is_only_current_season=1, season=config.SEASON,
                                            timeout=60).get_data_frames()[0]
     df = df[df["TEAM_ABBREVIATION"].fillna("") != ""]
+    if len(df) < 300:  # a truncated response must not wipe everyone's team
+        raise RuntimeError(f"player directory looks incomplete ({len(df)} players); keeping old teams")
     with db.cursor() as c:
+        # Anyone missing from today's directory is not on an NBA roster (waived, retired,
+        # unsigned). Without this, they keep their last team forever and get recommended.
+        c.execute("UPDATE players SET team=NULL")
         for r in df.itertuples():
             c.execute("""INSERT INTO players(nba_id, name, norm_name, team, updated) VALUES (?,?,?,?,?)
                          ON CONFLICT(nba_id) DO UPDATE SET team=excluded.team, name=excluded.name,

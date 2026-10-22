@@ -135,6 +135,11 @@ def played_team_dates(ctx: Context) -> set:
 def estimate_wtd(ctx: Context, pids) -> dict:
     """Week-to-date totals from box scores, used when Yahoo's own numbers aren't available.
     Approximation: assumes your best players with a game each day were the ones started."""
+    slots = team_slots(ctx).get(team_key_of(ctx, pids), {})
+    if slots and any(s not in ("?", None) for s in slots.values()):
+        # Lineup slots known (pasted from Yahoo): bench/IL players' games don't count.
+        # Slots are as of the paste, so a mid-week lineup change is an approximation.
+        pids = [p for p in pids if slots.get(p) not in BENCH_SLOTS]
     cur = ctx.logs[(ctx.logs["game_date"] >= ctx.week_start) & ctx.logs["nba_id"].isin(pids)]
     value = ctx.values["value"]
     tot = {s: 0.0 for s in SIM_STATS}
@@ -143,6 +148,24 @@ def estimate_wtd(ctx: Context, pids) -> dict:
         for s in SIM_STATS:
             tot[s] += float(day[s].sum())
     return tot
+
+
+BENCH_SLOTS = {"BN", "IL", "IL+", "NA"}
+
+
+def team_slots(ctx: Context) -> dict:
+    if "_slots" not in ctx._pools:
+        out = {}
+        with db.cursor() as c:
+            for r in c.execute("SELECT team_key, nba_id, slot FROM rosters"):
+                out.setdefault(r["team_key"], {})[r["nba_id"]] = r["slot"]
+        ctx._pools["_slots"] = out
+    return ctx._pools["_slots"]
+
+
+def team_key_of(ctx: Context, pids):
+    s = set(pids)
+    return next((k for k, ids in ctx.rosters.items() if set(ids) == s), None)
 
 
 def week_to_date(ctx: Context, team_key) -> dict:

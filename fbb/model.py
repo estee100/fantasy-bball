@@ -5,6 +5,7 @@ games down-weighted. Both knobs (half-life, prior-season weight) are tuned by th
 learning module against out-of-sample games, so the defaults in config are only a start.
 """
 import json
+import re
 import math
 from datetime import date, timedelta
 
@@ -17,6 +18,10 @@ STATS = ["min", "fgm", "fga", "fg3m", "fg3a", "ftm", "fta", "oreb", "dreb", "reb
          "ast", "stl", "blk", "tov", "pts", "dd", "td"]
 MAX_GAMES = 60  # older games carry ~nothing at any sensible half-life
 PRIOR_GAMES = 3.0
+
+# "won't be ready for the start of the season" is NOT season-ending; match real phrases only
+SEASON_ENDING = re.compile(r"out for the (?:rest of the |remainder of the )?season|season-ending|"
+                           r"rest of the season|remainder of the season|miss the (?:entire |whole )?season")
 
 INJURY_AVAIL = {"out": 0.05, "doubtful": 0.25, "questionable": 0.55, "day-to-day": 0.65,
                 "probable": 0.9, "suspension": 0.0}
@@ -47,6 +52,8 @@ def recency_weights(logs: pd.DataFrame, params: dict) -> pd.DataFrame:
 
 
 PRIOR_SEASON_HALF_LIFE = 30.0  # within last season: mostly a full-season average
+THIN_SEASON_GAMES = 25         # fewer games than this last season -> also use the season before
+OLDER_SEASON_WEIGHT = 0.7      # a game two seasons back counts this much vs last season
 
 
 def _season_estimates(df: pd.DataFrame, cols, hl_rate, hl_min) -> dict:
@@ -102,7 +109,8 @@ def project(logs: pd.DataFrame, params: dict, as_of=None) -> pd.DataFrame:
     seasons = sorted(logs["season"].unique())
     cur_s = seasons[-1]
     prev_s = seasons[-2] if len(seasons) > 1 else None
-    logs = logs[logs["season"].isin([cur_s, prev_s])]
+    prev2_s = seasons[-3] if len(seasons) > 2 else None
+    logs = logs[logs["season"].isin([cur_s, prev_s, prev2_s])]
     pcts = league_pcts(logs)
     df = _with_linear_ratio_stats(logs, pcts)
     cols = STATS + [k + "_lin" for k, d in config.CATEGORY_DEFS.items() if d[1] == "ratio"]
@@ -114,6 +122,19 @@ def project(logs: pd.DataFrame, params: dict, as_of=None) -> pd.DataFrame:
                                      PRIOR_SEASON_HALF_LIFE, PRIOR_SEASON_HALF_LIFE), ids)
     else:
         P = {k: np.zeros_like(v) for k, v in C.items()}
+    if prev2_s is not None and (df["season"] == prev2_s).any():
+        # Players whose last season was cut short (Achilles, ACL...) would otherwise be
+        # projected from a handful of games and shrunk to a generic rotation player. For them,
+        # top up last season's prior with the season before, counted at a discount for age.
+        P2 = _align(_season_estimates(df[df["season"] == prev2_s], cols,
+                                      PRIOR_SEASON_HALF_LIFE, PRIOR_SEASON_HALF_LIFE), ids)
+        thin = (P["n"] < THIN_SEASON_GAMES) & (P2["n"] > 0)
+        w1, w2 = P["n"][thin], OLDER_SEASON_WEIGHT * P2["n"][thin]
+        for k in ("min", "rate", "sq"):
+            a, b = P[k][thin], P2[k][thin]
+            shape = (-1,) + (1,) * (a.ndim - 1)
+            P[k][thin] = (w1.reshape(shape) * a + w2.reshape(shape) * b) / (w1 + w2).reshape(shape)
+        P["n"][thin] = w1 + w2
     # a prior can't be worth more games than it was built from
     k_r = np.minimum(P["n"], params.get("prior_strength_games", 15.0))
     k_m = np.minimum(P["n"], params.get("prior_strength_minutes", 8.0))
@@ -136,7 +157,7 @@ def project(logs: pd.DataFrame, params: dict, as_of=None) -> pd.DataFrame:
     std = np.sqrt(np.maximum(sq - mean ** 2, 0))
     out = pd.DataFrame(mean, index=ids, columns=cols)
     out = out.join(pd.DataFrame(std, index=ids, columns=[c + "_sd" for c in cols]))
-    out["n_games"] = (nc + P["n"]).astype(int)
+    out["n_games"] = np.round(nc + P["n"]).astype(int)
     out["cur_games"] = nc.astype(int)
     out["n_eff"] = C["n_eff"] + k_r
     out.index.name = "nba_id"
@@ -183,6 +204,78 @@ def recent_news_events(days=14) -> dict:
     return latest
 
 
+GAMES_PER_DAY = 82 / 174          # an NBA team plays ~82 games in ~174 days
+SEASON_END = (4, 12)               # regular season ends mid-April
+_NUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+        "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "a": 1, "a couple of": 2, "several": 3}
+_NUM_RE = r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a couple of|several|a)"
+_MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september",
+           "october", "november", "december"]
+
+
+def _num(tok):
+    return float(tok) if tok.isdigit() else float(_NUM.get(tok, 1))
+
+
+def season_games_left(today=None) -> float:
+    today = today or date.today()
+    end = date(today.year + (1 if today.month >= 8 else 0), *SEASON_END)
+    return max(0.0, (end - today).days * GAMES_PER_DAY)
+
+
+def injury_games_out(comment: str, status: str = "", today=None):
+    """Expected games missed, read from the injury note's own timeline. None if it gives none.
+    Examples: "at least the next four weeks" -> ~13; "between January and February" -> to
+    mid-January-ish; "out for the season" -> rest of season."""
+    if not comment:
+        return None
+    c = comment.lower()
+    today = today or date.today()
+    if SEASON_ENDING.search(c):
+        return season_games_left(today)
+    if re.search(r"\b(?:out|miss|sit|not play)\w*\b.{0,25}\b(?:\w+day'?s|tonight'?s|the)\s+"
+                 r"(?:season opener|opener|game|contest|matchup)\b", c):
+        return 1.0  # a single named game
+    m = re.search(_NUM_RE + r"(?:\s*(?:to|-|or)\s*" + _NUM_RE + r")?\s+weeks?", c)
+    if m:
+        lo = _num(m.group(1))
+        hi = _num(m.group(2)) if m.group(2) else lo
+        return (lo + hi) / 2 * 7 * GAMES_PER_DAY
+    m = re.search(_NUM_RE + r"(?:\s*(?:to|-|or)\s*" + _NUM_RE + r")?\s+months?", c)
+    if m:
+        lo = _num(m.group(1))
+        hi = _num(m.group(2)) if m.group(2) else lo
+        return (lo + hi) / 2 * 30 * GAMES_PER_DAY
+    found = [i for i, name in enumerate(_MONTHS) if re.search(r"\b" + name + r"\b", c)]
+    if found and re.search(r"return|back|until|sideline|out|ready|recover", c):
+        # first month mentioned that's still ahead of us; return around its midpoint
+        best = None
+        for i in found:
+            target = date(today.year, i + 1, 15)
+            if target <= today:
+                target = date(today.year + 1, i + 1, 15)
+            if best is None or target < best:
+                best = target
+        if len(found) > 1:  # "between January and February": aim between the two
+            ordered = sorted(date(today.year + (1 if (i + 1) < today.month else 0), i + 1, 1) for i in found)
+            best = ordered[0] + (ordered[-1] - ordered[0]) / 2 + timedelta(days=14)
+        return max(0.0, (best - today).days * GAMES_PER_DAY)
+    if "day-to-day" in c or "game-time decision" in c:
+        return 0.5
+    return None
+
+
+def _games_out(pid, injuries, events):
+    """News-extracted timeline first (more specific), then the injury note's own wording."""
+    ev = events.get(pid)
+    if ev and ev["games_out"] is not None:
+        return float(ev["games_out"])
+    inj = injuries.get(pid)
+    if inj and (inj["status"] or "").lower() in ("out", "doubtful", "suspension"):
+        return injury_games_out(inj["comment"] or "", inj["status"] or "")
+    return None
+
+
 def availability(pid, game_dates, injuries, events, b2b, team_dates_set):
     """Probability the player suits up for each of `game_dates` (ISO strings, sorted)."""
     inj = injuries.get(pid)
@@ -190,15 +283,22 @@ def availability(pid, game_dates, injuries, events, b2b, team_dates_set):
     if inj:
         status = (inj["status"] or "").lower()
         base = INJURY_AVAIL.get(status, 0.7)
-        if "season" in (inj["comment"] or "").lower() and status == "out":
+        if status == "out" and SEASON_ENDING.search((inj["comment"] or "").lower()):
             base = 0.0
-    ev = events.get(pid)
-    games_out = ev["games_out"] if ev and ev["games_out"] is not None else None
+    games_out = _games_out(pid, injuries, events)
+    if games_out is not None and inj and inj.get("date"):
+        # the note's clock started when it was written: games the team has played since then
+        # already count toward it (e.g. "out for Wednesday's opener", read on Thursday)
+        noted = str(inj["date"])[:10]
+        elapsed = sum(1 for d in team_dates_set if noted <= d < date.today().isoformat())
+        games_out = max(0.0, games_out - elapsed)
+        if games_out == 0:
+            base = max(base, 0.8)  # timeline served; still listed, so not fully trusted yet
     out = []
     for i, d in enumerate(game_dates):
         p = base
-        if games_out is not None:
-            p = 0.0 if i < games_out else max(base, 0.85)
+        if games_out is not None and games_out > 0:
+            p = 0.0 if i < round(games_out) else max(base, 0.85)
         prev = (date.fromisoformat(d) - timedelta(days=1)).isoformat()
         if prev in team_dates_set:
             p *= 1 - b2b.get(pid, 0.05)
@@ -207,15 +307,15 @@ def availability(pid, game_dates, injuries, events, b2b, team_dates_set):
 
 
 def ros_availability(pid, injuries, events) -> float:
+    """Expected share of the rest of the season's games the player suits up for."""
     inj = injuries.get(pid)
+    games_out = _games_out(pid, injuries, events)
+    left = max(season_games_left(), 1.0)
+    if games_out is not None:
+        return max(0.0, 1 - games_out / left) * 0.95
     if not inj:
         return 0.95
     status = (inj["status"] or "").lower()
-    if status == "out" and "season" in (inj["comment"] or "").lower():
-        return 0.0
-    ev = events.get(pid)
-    if ev and ev["games_out"]:
-        return max(0.0, 1 - ev["games_out"] / 60)
     return {"out": 0.8, "doubtful": 0.88, "questionable": 0.92}.get(status, 0.93)
 
 

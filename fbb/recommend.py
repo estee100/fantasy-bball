@@ -66,7 +66,7 @@ def recommend(ctx: sim.Context, n_sims=1000, top=8, seed=11) -> dict:
 
     rostered = ctx.rostered()
     with_team = set(ctx.players.index[ctx.players["team"].notna()])
-    free = [p for p in ctx.proj.index if p not in rostered and p in with_team]
+    free = [p for p in ctx.proj.index if p not in rostered and p in with_team and in_rotation(ctx, p)]
     week_games = {p: sum(av for _, av in sim.player_games(ctx, p, dates)) for p in free}
     by_ros = sorted(free, key=lambda p: -ros_value(ctx, p))[:15]
     by_week = sorted(free, key=lambda p: -week_games[p] * max(ctx.values["value"].get(p, 0), 0))[:10]
@@ -109,6 +109,22 @@ def recommend(ctx: sim.Context, n_sims=1000, top=8, seed=11) -> dict:
                                       "effective_weeks": eff, "cat_probs": base_cats}}
 
 
+def in_rotation(ctx, pid) -> bool:
+    """False for a player whose NBA team has played this season but who hasn't appeared,
+    with no injury to explain it: waived, out of the rotation, or away from the team.
+    (Real case: Kevin Porter Jr. was waived 2026-10-19 but still listed on MIL by the NBA's
+    player directory; the model projected him from last season and recommended him.)"""
+    if pid in ctx.injuries:
+        return True  # absence explained; injury availability handles it
+    season = ctx.logs["season"].max()
+    cur = ctx.logs[ctx.logs["season"] == season]
+    if "_team_games" not in ctx._pools:
+        ctx._pools["_team_games"] = cur.groupby("team")["game_date"].nunique().to_dict()
+        ctx._pools["_player_games"] = cur.groupby("nba_id").size().to_dict()
+    team_games = ctx._pools["_team_games"].get(ctx.team_of(pid), 0)
+    return team_games == 0 or ctx._pools["_player_games"].get(pid, 0) > 0
+
+
 def rationale(ctx, m, base_cats, dates, alerts) -> list:
     a, d = m["add"], m["drop"]
     out = []
@@ -132,6 +148,11 @@ def rationale(ctx, m, base_cats, dates, alerts) -> list:
     inj = ctx.injuries.get(d)
     if inj:
         out.append(f"{ctx.name(d)} is {inj['status']}")
+    inj_a = ctx.injuries.get(a)
+    if inj_a:  # a stash: worth knowing before you spend a roster spot on him
+        g = model._games_out(a, ctx.injuries, ctx.events)
+        out.append(f"{ctx.name(a)} is {inj_a['status']}" + (f", ~{g:.0f} games out" if g else "")
+                   + f": {(inj_a['comment'] or '')[:90]}")
     for pid in (a, d):
         for al in alerts.get(pid, [])[:1]:
             out.append(al)
