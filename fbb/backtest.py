@@ -63,6 +63,16 @@ def _context(logs_all, ws, params, num_teams, roster_size, active_slots):
                       week_end=we.date().isoformat(), active_slots=active_slots, roster_size=roster_size,
                       num_teams=num_teams, weeks_remaining=0, wtd={})
     ctx.today = ctx.week_start
+    if params.get("tm_adjust") or params.get("bt_known_out"):
+        from . import teammates
+        share, out_set = teammates.known_out_share(logs_all, proj, ws)
+        if params.get("bt_known_out"):
+            # the backtest's injury report: whoever missed his team's last game is listed out
+            # (same information for both arms of an A/B comparison)
+            for p in out_set:
+                ctx.injuries[p] = {"nba_id": p, "status": "Out", "comment": "missed last game", "date": ws.date().isoformat()}
+        if params.get("tm_adjust"):
+            ctx._pools["_tm_fixed"], ctx._pools["_tm_out_set"] = share, out_set
     if params.get("opp_adjust"):
         from . import matchups
         ctx.defense = matchups.defense_table(logs_all, ws, params.get("opp_k", 80))

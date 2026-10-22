@@ -122,9 +122,17 @@ def fetch_injuries() -> int:
                 rows.append((pid, inj.get("status"), inj.get("shortComment") or inj.get("longComment"),
                              inj.get("date")))
     if rows:  # an empty response is more likely an API hiccup than a fully healthy league
+        from datetime import date
+        today = date.today().isoformat()
         with db.cursor() as c:
             c.execute("DELETE FROM injuries")
             c.executemany("INSERT OR REPLACE INTO injuries VALUES (?,?,?,?)", rows)
+            # Daily archive (the live table is overwritten): lets future backtests use the injury
+            # report as it actually stood each day, e.g. to re-test the teammate-absence adjustment.
+            c.execute("""CREATE TABLE IF NOT EXISTS injury_history (day TEXT, nba_id INTEGER, status TEXT,
+                         comment TEXT, PRIMARY KEY (day, nba_id))""")
+            c.executemany("INSERT OR REPLACE INTO injury_history VALUES (?,?,?,?)",
+                          [(today, pid, st, cm) for pid, st, cm, _ in rows])
     db.kv_set("injuries_fetched", db.now_iso())
     return len(rows)
 

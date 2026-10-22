@@ -126,8 +126,8 @@ def day_plan(ctx, team_key, d, opp_map=None) -> dict:
         per_game *= model.production_multiplier(p, ctx.events, ctx.params)
         info[p] = {"nba_id": int(p), "name": ctx.name(p), "team": ctx.team_of(p), "positions": sorted(pos),
                    "pos_source": src, "game": opp_map.get((ctx.team_of(p), d)), "avail": a,
-                   "ev": a * per_game * sim.opp_factor(ctx, ctx.team_of(p), d), "current_slot": cur_slots.get(p),
-                   "opp_factor": sim.opp_factor(ctx, ctx.team_of(p), d)}
+                   "ev": a * per_game * sim.game_factor(ctx, p, d), "current_slot": cur_slots.get(p),
+                   "game_factor": sim.game_factor(ctx, p, d)}
         if cur_slots.get(p) in NOT_STARTABLE or d not in dict(sim.player_games(ctx, p, [d])):
             continue
         cands.append((p, pos, info[p]["ev"]))

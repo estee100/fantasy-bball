@@ -305,7 +305,7 @@ def simulate_team(ctx: Context, pids, dates, n_sims=2000, seed=7, wtd=None) -> n
             lines, probs = _pool(ctx, pid)
             masks.append(rng.random(n_sims) < sched[pid][d])
             draws.append(lines[rng.choice(len(lines), n_sims, p=probs)] * form[pid]
-                         * opp_factor(ctx, ctx.team_of(pid), d))
+                         * game_factor(ctx, pid, d))
         masks = np.stack(masks, 1)
         # Real lineup slots (PG/SG/G/SF/PF/F/C/C/Util/Util): for each pattern of who's
         # available in a simulated day, fill the slots best-first with position eligibility.
@@ -535,7 +535,7 @@ def team_dist(ctx: Context, pids, dates, per_week=True) -> dict:
     for d in dates:
         for p, (s, considered) in expected_starts(ctx, pids, d, avail).items():
             used[p] += s
-            used_adj[p] += s * opp_factor(ctx, ctx.team_of(p), d)
+            used_adj[p] += s * game_factor(ctx, p, d)
             if considered:
                 nvar[p] += avail[p] * (1 - avail[p])  # does he play at all: the games coin flip
     scale = 7 / len(dates) if per_week and dates else 1.0
@@ -626,3 +626,9 @@ def opp_factor(ctx, team, d) -> float:
         ctx._pools["_opp_of"] = m
     opp = ctx._pools["_opp_of"].get((team, d))
     return float(ctx.defense.get(opp, 1.0)) if opp else 1.0
+
+
+def game_factor(ctx, pid, d) -> float:
+    """Everything that scales one specific game: opponent defense x teammates' absences."""
+    from . import teammates
+    return opp_factor(ctx, ctx.team_of(pid), d) * teammates.game_factor(ctx, pid, d)
