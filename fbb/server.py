@@ -67,9 +67,23 @@ def _clean_nan(o):
     return o
 
 
+@app.middleware("http")
+async def _no_stale_assets(request, call_next):
+    # without this, browsers reuse an old app.js for hours after an update (new page, old code)
+    resp = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    from fastapi.responses import HTMLResponse
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    for f in ("app.js", "style.css"):  # version the asset URLs so an update is always fetched
+        v = int((STATIC / f).stat().st_mtime)
+        html = html.replace(f'/static/{f}"', f'/static/{f}?v={v}"')
+    return HTMLResponse(html)
 
 
 def _player_row(ctx, pid, dates, slot=None):
