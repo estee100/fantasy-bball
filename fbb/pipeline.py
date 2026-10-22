@@ -44,7 +44,7 @@ def refresh(daily=False) -> dict:
         return {"skipped": "refresh already running"}
     try:
         status = db.kv_get("pipeline_status", {})
-        if daily or not db.kv_get("daily_done"):
+        if daily or db.kv_get("daily_done") != date.today().isoformat():
             _step(status, "player_directory", nba.ingest_player_directory)
             _step(status, "schedule", nba.ingest_schedule)
             for season in (config.PRIOR_SEASON, config.PRIOR2_SEASON):  # 2 back: tuning only
@@ -79,7 +79,7 @@ def refresh(daily=False) -> dict:
         _step(status, "evaluate_moves", learning.evaluate_moves, ctx.logs)
         _step(status, "league_table", lambda: db.kv_set("league_table", league_table(ctx)) or "ok")
 
-        if daily or not db.kv_get("daily_done"):
+        if daily or db.kv_get("daily_done") != date.today().isoformat():
             _step(status, "tune_projections", learning.tune_projections)
             _step(status, "news_multipliers", learning.learn_news_multipliers)
             _step(status, "scouting_folder", lambda: len(news.ingest_report_folder()))
