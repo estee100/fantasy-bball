@@ -143,7 +143,14 @@ def readiness() -> list:
         um = db.kv_get("unmatched_players", [])
         checks.append({"name": "Player matching", "ok": not um,
                        "detail": "all matched" if not um else "unmatched: " + ", ".join(um[:5])})
-    elif config.yahoo_configured():
+    elif config.yahoo_authorized() and "not authorized" in str(
+            (db.kv_get("pipeline_status", {}).get("yahoo") or {}).get("error", "")):
+        # Yahoo has gated the Fantasy API behind an approval program since 2026-07-22:
+        # login works, every data call is 403 until the app is approved. Sync retries every
+        # refresh and switches to the real league by itself once approval lands.
+        checks.append({"name": "Yahoo rosters", "ok": False,
+                       "detail": "waiting for Yahoo to approve API access (retrying every refresh; demo league until then)"})
+    elif config.yahoo_configured() and not config.yahoo_authorized():
         checks.append({"name": "Yahoo rosters", "ok": False,
                        "detail": "credentials set, not authorized yet: run `python -m fbb auth` in a terminal"})
     else:
