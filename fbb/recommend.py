@@ -115,6 +115,10 @@ def rationale(ctx, m, base_cats, dates, alerts) -> list:
     ga, gd = len(sim.player_games(ctx, a, dates)), len(sim.player_games(ctx, d, dates))
     if ga != gd:
         out.append(f"{ga} games left this week vs {gd}")
+    if model.scoring_mode() == "points":
+        dv = ctx.values["value"].get(a, 0) - ctx.values["value"].get(d, 0)
+        out.append(f"{dv:+.1f} fantasy pts per game ({ctx.values['value'].get(a, 0):.1f} vs "
+                   f"{ctx.values['value'].get(d, 0):.1f})")
     if model.scoring_mode() == "categories":
         close = [k for k, p in base_cats.items() if 0.2 <= p <= 0.8]
         diffs = {k: ctx.values[f"z_{k}"].get(a, 0) - ctx.values[f"z_{k}"].get(d, 0) for k in ctx.cats}

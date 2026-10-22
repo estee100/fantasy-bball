@@ -36,6 +36,7 @@
     <button role="tab" data-tab="news">News <span class="count" id="news-count"></span></button>
     <button role="tab" data-tab="trade">Trade lab</button>
     <button role="tab" data-tab="learning">Model &amp; learning</button>
+    <button role="tab" data-tab="setup">League setup</button>
   </nav>
 </header>
 <div class="card ready-pop hidden" id="ready-pop"></div>
@@ -43,15 +44,16 @@
 <main>
   <!-- ======================================================= OVERVIEW -->
   <section data-panel="overview">
+    <div class="note warn-banner hidden" id="rosters-banner"></div>
     <div class="grid cols-4" id="kpis"></div>
     <div class="grid cols-2 section-gap">
       <div class="card">
-        <div class="hd"><h2>Category odds this week</h2><span class="sub" id="cat-sub"></span>
-          <div class="right legend"><span><i style="background:var(--div-pos)"></i>Favours you</span><span><i style="background:var(--div-neg)"></i>Favours opponent</span></div></div>
+        <div class="hd"><h2 id="cat-title">Category odds this week</h2><span class="sub" id="cat-sub"></span>
+          <div class="right legend" id="cat-legend"><span><i style="background:var(--div-pos)"></i>Favours you</span><span><i style="background:var(--div-neg)"></i>Favours opponent</span></div></div>
         <div class="bd"><div class="cat-rows" id="cat-rows"></div></div>
       </div>
       <div class="card">
-        <div class="hd"><h2>How many categories you win</h2><span class="sub">share of 2,000 simulated weeks</span></div>
+        <div class="hd"><h2 id="hist-title">How many categories you win</h2><span class="sub">share of 2,000 simulated weeks</span></div>
         <div class="bd"><div class="hist" id="hist" role="img"></div>
           <div class="small muted" id="hist-note" style="margin-top:8px"></div></div>
       </div>
@@ -155,6 +157,37 @@
     </div>
   </section>
 </main>
+
+  <!-- ======================================================= SETUP (manual league) -->
+  <section data-panel="setup" class="hidden">
+    <div class="note" style="margin-bottom:16px">Yahoo hasn't approved API access yet, so rosters come from copy-paste for now.
+      Open a team's page on Yahoo, press <b>Ctrl+A</b> then <b>Ctrl+C</b>, and paste the whole thing below; player names and slots are picked out automatically.
+      Once Yahoo approves access, the live sync takes over.</div>
+    <div class="grid cols-2">
+      <div class="card">
+        <div class="hd"><h2>Paste a team</h2></div>
+        <div class="bd">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+            <input id="team-name" class="btn" style="flex:1;min-width:180px;cursor:text" placeholder="Team name (as in your league)">
+            <label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="team-mine"> This is my team</label>
+          </div>
+          <textarea id="team-text" placeholder="Paste the team page here…"></textarea>
+          <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+            <button class="btn primary" id="team-btn">Import team</button>
+            <span class="small muted" id="team-status"></span>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="align-self:start">
+        <div class="hd"><h2>League settings</h2></div>
+        <div class="bd" id="settings-form"></div>
+      </div>
+    </div>
+    <div class="card section-gap">
+      <div class="hd"><h2>Teams</h2><span class="sub">pick who you're playing this week · re-paste a team whenever its roster changes</span></div>
+      <div class="bd tbl-wrap"><table id="teams-table"></table></div>
+    </div>
+  </section>
 
 <div id="drawer-root"></div>
 <div class="tooltip hidden" id="tip"></div>

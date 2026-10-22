@@ -87,6 +87,7 @@ def _player_row(ctx, pid, dates, slot=None):
            "games_left": len(games), "expected_games": round(sum(a for _, a in games), 2),
            "value": float(v["value"]) if v is not None else None,
            "var": float(v["var"]) if v is not None else None,
+           "fp": float(v["value"]) if v is not None and model.scoring_mode() == "points" else None,
            "trend": trend, "n_games": int(p["n_games"]) if p is not None else 0}
     if p is not None:
         row["proj"] = {s: round(float(p[s]), 2) for s in ("min", "pts", "reb", "ast", "stl", "blk", "fg3m", "tov")}
@@ -132,7 +133,15 @@ def state():
         "opp_roster": [_player_row(ctx, p, dates) for p in opp],
         "league_table": db.kv_get("league_table", []),
         "calibration": db.kv_get("calibration"),
+        "manual": _manual_summary(),
     })
+
+
+def _manual_summary():
+    if db.kv_get("league_source") != "manual":
+        return None
+    from . import manual
+    return manual.summary()
 
 
 @app.get("/api/news")
@@ -261,3 +270,75 @@ def add_report(r: ReportIn):
     if len(r.text) < 50:
         raise HTTPException(400, "report too short")
     return news.ingest_report(r.text, r.source)
+
+
+# ---------------------------------------------------------------- manual league mode
+
+class ManualTeamIn(BaseModel):
+    name: str
+    text: str
+    mine: bool = False
+
+
+class ManualConfigIn(BaseModel):
+    num_teams: int = 10
+    active_slots: int = 10
+    roster_size: int = 13
+    point_weights: dict | None = None
+    categories: list | None = None
+
+
+class OpponentIn(BaseModel):
+    team_key: str | None
+
+
+def _manual_changed():
+    """Re-run the model on the new rosters (in the background: takes a few seconds)."""
+    import threading
+    pipeline.context(reload=True)
+    threading.Thread(target=pipeline.refresh, daemon=True).start()
+
+
+@app.get("/api/manual")
+def manual_get():
+    from . import manual
+    return _json(manual.summary())
+
+
+@app.post("/api/manual/config")
+def manual_config(cfg: ManualConfigIn):
+    from . import manual
+    manual.configure(cfg.num_teams, cfg.active_slots, cfg.roster_size, cfg.point_weights, cfg.categories)
+    _manual_changed()
+    return _json(manual.summary())
+
+
+@app.post("/api/manual/team")
+def manual_team(t: ManualTeamIn):
+    from . import manual
+    if db.kv_get("league_source") != "manual":
+        raise HTTPException(400, "Save league settings first")
+    if not t.name.strip():
+        raise HTTPException(400, "Team name is required")
+    try:
+        res = manual.set_team(t.name.strip(), t.text, t.mine, pipeline.context())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _manual_changed()
+    return _json(res)
+
+
+@app.delete("/api/manual/team/{key}")
+def manual_delete(key: str):
+    from . import manual
+    manual.remove_team(key)
+    _manual_changed()
+    return {"ok": True}
+
+
+@app.post("/api/manual/opponent")
+def manual_opponent(o: OpponentIn):
+    from . import manual
+    manual.set_opponent(o.team_key)
+    _manual_changed()
+    return {"ok": True}

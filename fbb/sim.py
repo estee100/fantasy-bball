@@ -82,7 +82,7 @@ def load_context() -> Context:
                   week_start=ws, week_end=we, active_slots=db.kv_get("active_slots", config.DEFAULT_ACTIVE_SLOTS),
                   roster_size=roster_size, num_teams=num_teams,
                   weeks_remaining=db.kv_get("weeks_remaining", default_weeks_remaining()),
-                  wtd=db.kv_get("week_to_date", {}))
+                  wtd=db.kv_get("week_to_date") or {})
     return ctx
 
 
@@ -265,8 +265,33 @@ def simulate_matchup(ctx: Context, my_pids=None, opp_pids=None, n_sims=2000, see
     hist = None
     if wins is not None:
         hist = np.bincount(wins.round().astype(int), minlength=len(ctx.cats) + 1).tolist()
-    return {"win_prob": win, "cat_probs": cats, "expected": summary, "cats_won_hist": hist,
-            "dates": dates, "a": a, "b": b}
+    out = {"win_prob": win, "cat_probs": cats, "expected": summary, "cats_won_hist": hist,
+           "dates": dates, "a": a, "b": b}
+    if model.scoring_mode() == "points":
+        out.update(points_summary(ctx, a, b, ctx.my_key, ctx.opp_key))
+    return out
+
+
+def points_summary(ctx: Context, a, b, my_key, opp_key) -> dict:
+    """Projected final fantasy points, where they come from, and the margin distribution."""
+    ix = {s: j for j, s in enumerate(SIM_STATS)}
+    pw = model.point_weights()
+    fa = sum(a[:, ix[s]] * w for s, w in pw.items() if s in ix)
+    fb = sum(b[:, ix[s]] * w for s, w in pw.items() if s in ix)
+    wa, wb = week_to_date(ctx, my_key), week_to_date(ctx, opp_key)
+    breakdown = {s: [float(a[:, ix[s]].mean() * w), float(b[:, ix[s]].mean() * w)]
+                 for s, w in pw.items() if s in ix}
+    margin = fa - fb
+    edges = np.linspace(np.percentile(margin, 1), np.percentile(margin, 99), 21)
+    counts, edges = np.histogram(margin, bins=edges)
+    return {"points": {
+        "projected": [float(fa.mean()), float(fb.mean())],
+        "so_far": [sum(wa.get(s, 0) * w for s, w in pw.items()), sum(wb.get(s, 0) * w for s, w in pw.items())],
+        "range_me": [float(np.percentile(fa, 10)), float(np.percentile(fa, 90))],
+        "range_opp": [float(np.percentile(fb, 10)), float(np.percentile(fb, 90))],
+        "breakdown": breakdown,
+        "margin_hist": {"counts": counts.tolist(), "edges": edges.tolist()},
+    }}
 
 
 # ------------------------------------------------------------ season-long (analytic)
@@ -322,6 +347,15 @@ def team_season_dist(ctx: Context, pids):
 def league_average_dist(ctx: Context):
     if "_avg" not in ctx._pools:
         dists = [team_season_dist(ctx, pids) for key, pids in ctx.rosters.items()
-                 if key != ctx.my_key]
-        ctx._pools["_avg"] = model.avg_opponent_dist(dists) if dists else None
+                 if key != ctx.my_key and pids]
+        if dists:
+            ctx._pools["_avg"] = model.avg_opponent_dist(dists)
+        else:
+            # No other rosters known (manual mode, only your team pasted): a league-average
+            # team is approximated by dealing the top N x roster_size players into N teams.
+            mine = set(ctx.rosters.get(ctx.my_key, []))
+            pool = [p for p in ctx.values["var"].sort_values(ascending=False).index if p not in mine]
+            teams = [pool[i::ctx.num_teams - 1] for i in range(ctx.num_teams - 1)]
+            teams = [t[:ctx.roster_size] for t in teams]
+            ctx._pools["_avg"] = model.avg_opponent_dist([team_season_dist(ctx, t) for t in teams])
     return ctx._pools["_avg"]

@@ -44,6 +44,7 @@ document.addEventListener("DOMContentLoaded", () => {
     $("#ready-btn").setAttribute("aria-expanded", String(!pop.classList.contains("hidden")));
   });
   $("#report-btn").addEventListener("click", submitReport);
+  $("#team-btn").addEventListener("click", importTeam);
   initTrade();
   initTips();
   load();
@@ -70,10 +71,11 @@ function initTheme() {
 
 function showTab(tab) {
   $$("nav.tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
-  $$("main > section").forEach((s) => s.classList.toggle("hidden", s.dataset.panel !== tab));
+  $$("section[data-panel]").forEach((s) => s.classList.toggle("hidden", s.dataset.panel !== tab));
   history.replaceState(null, "", "#" + tab);
   if (tab === "news") loadNews();
   if (tab === "learning") loadLearning();
+  if (tab === "setup") loadSetup();
 }
 
 async function load() {
@@ -102,6 +104,7 @@ async function refreshNow() {
 }
 
 function renderAll() {
+  renderBanner();
   renderHeader();
   renderKPIs();
   renderCats();
@@ -146,6 +149,11 @@ function renderKPIs() {
   if (m) {
     const days = (m.dates || []).length;
     tiles.push(kpi("Win probability this week", pct(m.win_prob), `vs ${esc(L.opponent || "opponent")} · ${days} day${days === 1 ? "" : "s"} left`, m.win_prob));
+    if (L.scoring_mode === "points" && m.points) {
+      const [me, op] = m.points.projected;
+      tiles.push(kpi("Projected final score", `${Math.round(me)} <small>– ${Math.round(op)}</small>`,
+        `so far ${Math.round(m.points.so_far[0])}–${Math.round(m.points.so_far[1])} · likely range ${Math.round(m.points.range_me[0])}–${Math.round(m.points.range_me[1])}`, null));
+    }
     if (L.scoring_mode === "categories") {
       const cp = m.cat_probs || {};
       const exp = Object.values(cp).reduce((a, b) => a + b, 0);
@@ -154,12 +162,12 @@ function renderKPIs() {
       tiles.push(kpi("Expected categories won", `${fmt(exp, 1)} <small>of ${L.categories.length}</small>`,
         toss.length ? `Toss-ups: ${esc(toss.join(", "))}` : "No toss-up categories", exp / L.categories.length));
     }
-  } else tiles.push(kpi("Win probability this week", "–", "run a refresh", null));
+  } else tiles.push(kpi("Win probability this week", "–", S.manual ? "pick this week's opponent in League setup" : "run a refresh", null));
   if (rec?.base) {
     const table = S.league_table || [];
     const rank = table.findIndex((t) => t.is_mine) + 1;
     tiles.push(kpi("Typical-week strength", pct(rec.base.season_strength),
-      `P(win) vs a league-average team${rank ? ` · #${rank} of ${table.length}` : ""}`, rec.base.season_strength));
+      `P(win) vs a league-average team${rank && table.length > 1 ? ` · #${rank} of ${table.length}` : ""}`, rec.base.season_strength));
   }
   const best = rec?.moves?.[0];
   tiles.push(kpi("Best move available", best ? `${signed(best.score, 2)} <small>wins</small>` : "None",
@@ -183,7 +191,20 @@ function fmtCat(k, v) {
 function renderCats() {
   const m = S.matchup;
   const el = $("#cat-rows");
-  if (!m || S.league.scoring_mode !== "categories") {
+  const points = S.league.scoring_mode === "points";
+  $("#cat-title").textContent = points ? "Where the points come from" : "Category odds this week";
+  $("#cat-legend").innerHTML = points
+    ? `<span><i style="background:var(--me)"></i>You</span><span><i style="background:var(--opp)"></i>Opponent</span>`
+    : `<span><i style="background:var(--div-pos)"></i>Favours you</span><span><i style="background:var(--div-neg)"></i>Favours opponent</span>`;
+  if (!m) {
+    $("#cat-sub").textContent = "";
+    el.innerHTML = S.manual
+      ? `<div class="empty">Pick this week's opponent in <a href="#setup" onclick="showTab('setup');return false">League setup</a> to see matchup odds.</div>`
+      : `<div class="empty">No matchup yet.</div>`;
+    return;
+  }
+  if (points && m.points) { renderPointsBreakdown(m.points, el); return; }
+  if (S.league.scoring_mode !== "categories") {
     el.innerHTML = `<div class="empty">${S.league.scoring_mode === "points" ? "Points league: see the win probability above." : "No matchup yet."}</div>`;
     return;
   }
@@ -209,6 +230,8 @@ function renderCats() {
 function renderHist() {
   const m = S.matchup;
   const el = $("#hist");
+  if (S.league.scoring_mode === "points") { renderMarginHist(m, el); return; }
+  $("#hist-title").textContent = "How many categories you win";
   if (!m?.cats_won_hist) { el.innerHTML = `<div class="empty" style="width:100%">No simulation yet.</div>`; return; }
   const h = m.cats_won_hist, tot = h.reduce((a, b) => a + b, 0) || 1, n = h.length - 1;
   const max = Math.max(...h);
@@ -314,8 +337,9 @@ function injuryStatus(inj) {
 function rosterTable(rows, el, withSlot) {
   const cats = [["min", "MIN"], ["pts", "PTS"], ["reb", "REB"], ["ast", "AST"], ["stl", "STL"], ["blk", "BLK"], ["fg3m", "3PM"], ["tov", "TO"], ["fg_pct", "FG%"], ["ft_pct", "FT%"]];
   const maxVar = Math.max(1, ...rows.map((r) => Math.abs(r.var || 0)));
+  const points = S.league.scoring_mode === "points";
   el.innerHTML = `<thead><tr><th>Player</th>${withSlot ? "<th>Slot</th>" : ""}<th>Status</th><th class="r" title="Games left this week (expected, after injury and rest risk)">Games</th>
-    ${cats.map(([, l]) => `<th class="r">${l}</th>`).join("")}<th class="r">Value</th><th class="r" title="Last 5 games vs projection">Form</th></tr></thead>
+    ${cats.map(([, l]) => `<th class="r">${l}</th>`).join("")}<th class="r" title="${points ? "Projected fantasy points per game" : "Value above replacement level"}">${points ? "FP/G" : "Value"}</th><th class="r" title="Last 5 games vs projection">Form</th></tr></thead>
     <tbody>${rows.map((r) => `<tr class="click" data-pid="${r.nba_id}">
       <td><span class="pname">${esc(r.name)}</span><span class="pteam">${esc(r.team || "")}${r.positions ? " · " + esc(r.positions) : ""}</span></td>
       ${withSlot ? `<td><span class="slot">${esc(r.slot || "")}</span></td>` : ""}
@@ -329,7 +353,7 @@ function rosterTable(rows, el, withSlot) {
       }).join("")}
       <td class="r num"><span style="display:inline-flex;align-items:center;gap:6px">
         <span style="width:44px;height:6px;background:var(--surface-2);border-radius:3px;display:inline-block;position:relative">
-          <span style="position:absolute;left:0;top:0;bottom:0;border-radius:3px;width:${Math.max(0, (r.var || 0) / maxVar) * 100}%;background:var(--me)"></span></span>${fmt(r.var, 1)}</span></td>
+          <span style="position:absolute;left:0;top:0;bottom:0;border-radius:3px;width:${Math.max(0, (r.var || 0) / maxVar) * 100}%;background:var(--me)"></span></span>${points ? fmt(r.fp, 1) : fmt(r.var, 1)}</span></td>
       <td class="r num">${r.trend == null ? "–" : `<span class="${r.trend >= 0 ? "delta-up" : "delta-down"}">${r.trend >= 0 ? "▲" : "▼"} ${fmt(Math.abs(r.trend), 1)}</span>`}</td>
     </tr>`).join("")}</tbody>`;
   $$("tr.click", el).forEach((tr) => tr.addEventListener("click", () => openPlayer(+tr.dataset.pid)));
@@ -660,4 +684,122 @@ function initTips() {
     const y = e.clientY + 16 + tip.offsetHeight > innerHeight ? e.clientY - tip.offsetHeight - 10 : e.clientY + 16;
     tip.style.left = x + "px"; tip.style.top = y + "px";
   });
+}
+
+/* ------------------------------------------------------------------ manual league setup */
+function renderBanner() {
+  const b = $("#rosters-banner");
+  const M = S.manual;
+  if (!M) { b.classList.add("hidden"); return; }
+  const others = M.teams.filter((t) => !t.is_mine).length;
+  const needed = M.num_teams - 1;
+  const mine = M.teams.some((t) => t.is_mine);
+  let msg = "";
+  if (!mine) msg = "Paste your own team in League setup to get started.";
+  else if (others < needed) msg = `Only ${others} of ${needed} other teams pasted: recommended pickups may already be on someone's roster, and the league-average comparison is approximate. Paste the rest in League setup.`;
+  else if (!M.opponent_key) msg = "Pick this week's opponent in League setup to see matchup odds.";
+  b.classList.toggle("hidden", !msg);
+  b.innerHTML = msg ? `${ICON.warn.replace("<svg", '<svg style="width:16px;height:16px;color:var(--warning)"')}<span>${esc(msg)}</span>
+    <button class="btn" style="margin-left:auto" onclick="showTab('setup')">League setup</button>` : "";
+}
+
+let setupData = null;
+async function loadSetup() {
+  setupData = await api("/api/manual");
+  renderSetup();
+}
+
+function renderSetup() {
+  const M = setupData;
+  const pw = M.point_weights || {};
+  const W = [["pts", "Points"], ["reb", "Total rebounds"], ["ast", "Assists"], ["stl", "Steals"], ["blk", "Blocked shots"], ["tov", "Turnovers"]];
+  $("#settings-form").innerHTML = `
+    <div class="setting-sep">Points per stat</div>
+    ${W.map(([k, l]) => `<div class="setting-row"><span>${l}</span><input data-w="${k}" type="number" step="0.1" value="${pw[k] ?? ""}"></div>`).join("")}
+    <div class="setting-sep">Roster</div>
+    <div class="setting-row"><span>Teams in league</span><input id="cfg-teams" type="number" value="${M.num_teams}"></div>
+    <div class="setting-row"><span>Starting slots</span><input id="cfg-active" type="number" value="${M.active_slots}"></div>
+    <div class="setting-row"><span>Roster size (excl. IL)</span><input id="cfg-size" type="number" value="${M.roster_size}"></div>
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center"><button class="btn" id="cfg-save">Save settings</button><span class="small muted" id="cfg-status"></span></div>`;
+  $("#cfg-save").addEventListener("click", async () => {
+    const weights = {};
+    $$("#settings-form [data-w]").forEach((i) => { if (i.value !== "") weights[i.dataset.w] = +i.value; });
+    setupData = await api("/api/manual/config", { method: "POST", body: JSON.stringify({
+      num_teams: +$("#cfg-teams").value, active_slots: +$("#cfg-active").value, roster_size: +$("#cfg-size").value, point_weights: weights }) });
+    $("#cfg-status").textContent = "Saved. Re-running the model…";
+    afterManualChange();
+  });
+  const T = M.teams;
+  $("#teams-table").innerHTML = T.length ? `<thead><tr><th>Team</th><th class="r">Players</th><th>Updated</th><th>Opponent this week</th><th></th></tr></thead><tbody>
+    ${T.map((t) => `<tr><td><span class="pname">${esc(t.name)}</span>${t.is_mine ? ' <span class="chip mine">You</span>' : ""}</td>
+      <td class="r num">${t.players}</td><td class="small ${t.updated && (Date.now() - new Date(t.updated)) > 7 * 864e5 ? "delta-down" : "muted"}">${esc(ago(t.updated))}</td>
+      <td>${t.is_mine ? "" : `<label class="small" style="display:flex;gap:6px;align-items:center"><input type="radio" name="opp" value="${esc(t.team_key)}" ${M.opponent_key === t.team_key ? "checked" : ""}> this week</label>`}</td>
+      <td class="r"><button class="btn ghost small" data-del="${esc(t.team_key)}">Remove</button></td></tr>`).join("")}</tbody>`
+    : `<tr><td class="empty">No teams yet. Start with yours.</td></tr>`;
+  $$("#teams-table input[name=opp]").forEach((r) => r.addEventListener("change", async () => {
+    await api("/api/manual/opponent", { method: "POST", body: JSON.stringify({ team_key: r.value }) });
+    afterManualChange();
+  }));
+  $$("#teams-table [data-del]").forEach((b) => b.addEventListener("click", async () => {
+    if (!confirm("Remove this team?")) return;
+    await fetch(`/api/manual/team/${encodeURIComponent(b.dataset.del)}`, { method: "DELETE" });
+    loadSetup(); afterManualChange();
+  }));
+  if (!T.some((t) => t.is_mine)) $("#team-mine").checked = true;
+}
+
+async function importTeam() {
+  const name = $("#team-name").value.trim(), text = $("#team-text").value;
+  const st = $("#team-status");
+  if (!name) { st.textContent = "Enter the team's name."; return; }
+  if (text.length < 20) { st.textContent = "Paste the team page first."; return; }
+  st.textContent = "Importing…";
+  const r = await fetch("/api/manual/team", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, text, mine: $("#team-mine").checked }) });
+  const d = await r.json();
+  if (!r.ok) { st.textContent = d.detail || "Import failed"; return; }
+  st.innerHTML = `Imported ${d.players} players.${d.unmatched?.length ? ` <span class="delta-down">Couldn't match: ${esc(d.unmatched.join(", "))}</span>` : ""}`;
+  $("#team-name").value = ""; $("#team-text").value = ""; $("#team-mine").checked = false;
+  loadSetup(); afterManualChange();
+}
+
+async function afterManualChange() {
+  // the server re-runs the model in the background; pick up the result when it lands
+  const before = S?.last_refresh;
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 2500));
+    const st = await api("/api/state");
+    if (st.last_refresh !== before) { S = st; renderAll(); break; }
+  }
+}
+
+function renderPointsBreakdown(P, el) {
+  $("#cat-sub").textContent = "projected fantasy points by stat, full week";
+  const LBL = { pts: "Points", reb: "Rebounds", ast: "Assists", stl: "Steals", blk: "Blocks", tov: "Turnovers", fg3m: "3PM", oreb: "Off. reb", dreb: "Def. reb", dd: "Double-dbl", td: "Triple-dbl", fgm: "FGM", fga: "FGA", ftm: "FTM", fta: "FTA" };
+  const rows = Object.entries(P.breakdown);
+  const max = Math.max(1, ...rows.flatMap(([, v]) => v.map(Math.abs)));
+  const [me, op] = P.projected;
+  el.innerHTML = `<div class="score-line"><span class="big num" style="color:var(--me)">${Math.round(me)}</span><span class="vs">vs</span>
+      <span class="big num" style="color:var(--opp)">${Math.round(op)}</span><span class="small muted">projected final · ${pct(S.matchup.win_prob)} to win</span></div>
+    <div class="pair-rows">${rows.map(([k, [a, b]]) => `
+      <div class="pair-row" data-tip="${esc(LBL[k] || k)}: you ${fmt(a, 0)} fantasy pts, opponent ${fmt(b, 0)}">
+        <span>${esc(LBL[k] || k)}</span>
+        <div class="pair-bars"><span style="width:${Math.abs(a) / max * 100}%;background:var(--me);opacity:${a < 0 ? .5 : 1}"></span>
+          <span style="width:${Math.abs(b) / max * 100}%;background:var(--opp);opacity:${b < 0 ? .5 : 1}"></span></div>
+        <span class="nums num">${fmt(a, 0)}<br>${fmt(b, 0)}</span></div>`).join("")}</div>
+    <div class="small muted" style="margin-top:8px">Turnovers count against you, shown faded.</div>`;
+}
+
+function renderMarginHist(m, el) {
+  $("#hist-title").textContent = "Final margin (you − opponent)";
+  const H = m?.points?.margin_hist;
+  if (!H) { el.innerHTML = `<div class="empty" style="width:100%">No simulation yet.</div>`; $("#hist-note").innerHTML = ""; return; }
+  const tot = H.counts.reduce((a, b) => a + b, 0) || 1, max = Math.max(...H.counts);
+  el.setAttribute("aria-label", "Distribution of the final points margin");
+  el.innerHTML = H.counts.map((c, i) => {
+    const lo = H.edges[i], hi = H.edges[i + 1], mid = (lo + hi) / 2;
+    return `<div class="col ${mid > 0 ? "win" : ""}" data-tip="Margin ${Math.round(lo)} to ${Math.round(hi)}: ${pct(c / tot, 1)} of simulations">
+      <div class="b" style="height:${(c / max) * 80}%"></div><span>${i % 5 === 0 ? Math.round(mid) : ""}</span></div>`;
+  }).join("");
+  $("#hist-note").innerHTML = `<span class="legend"><span><i style="background:var(--me)"></i>You win (${pct(m.win_prob)})</span><span><i style="background:var(--axis)"></i>You lose</span></span>`;
 }

@@ -68,7 +68,11 @@ def refresh(daily=False) -> dict:
         ctx = context(reload=True)  # pick up new news events
 
         _step(status, "roles", lambda: roles.store(roles.scan(ctx)) or "ok")
-        m = _step(status, "matchup_sim", sim.simulate_matchup, ctx)
+        m = None
+        if ctx.rosters.get(ctx.opp_key):
+            m = _step(status, "matchup_sim", sim.simulate_matchup, ctx)
+        else:
+            db.kv_set("matchup", None)  # no opponent known yet (manual mode)
         if m:
             learning.record_matchup_prediction(ctx, m)
             db.kv_set("matchup", {k: v for k, v in m.items() if k not in ("a", "b")})
@@ -155,6 +159,20 @@ def readiness() -> list:
                        "detail": "credentials set, not authorized yet: run `python -m fbb auth` in a terminal"})
     else:
         checks.append({"name": "Yahoo rosters", "ok": False, "detail": "demo league: add Yahoo credentials to .env"})
+    if src == "manual":
+        from . import manual
+        info = manual.summary()
+        others = [t for t in info["teams"] if not t["is_mine"]]
+        stale = []
+        for t in info["teams"]:
+            if t["updated"]:
+                age_d = (now - datetime.fromisoformat(t["updated"])).days
+                if age_d >= 7:
+                    stale.append(t["name"])
+        checks.append({"name": "Pasted rosters", "ok": len(others) >= info["num_teams"] - 1 and not stale,
+                       "detail": f"{len(others)} of {info['num_teams'] - 1} other teams pasted"
+                                 + (f"; over a week old: {', '.join(stale)}" if stale else "")
+                                 + ("" if info["opponent_key"] else "; no opponent picked")})
     checks.append({"name": "News extraction", "ok": bool(config.ANTHROPIC_KEY),
                    "detail": "Claude" if config.ANTHROPIC_KEY else "keyword tagger only (no ANTHROPIC_API_KEY)"})
     return checks
