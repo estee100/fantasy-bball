@@ -90,3 +90,11 @@ fbb/
   server.py     FastAPI + scheduler
   static/       dashboard
 ```
+
+## Tests
+
+```
+python -m pytest -q
+```
+
+Tests that need data run on a temporary copy of `data/fbb.db`, never the real one.
