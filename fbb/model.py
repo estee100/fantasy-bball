@@ -194,7 +194,11 @@ def value_players(proj: pd.DataFrame, num_teams=10, roster_size=13) -> pd.DataFr
     if scoring_mode() == "points":
         pw = point_weights()
         out["value"] = sum(proj[s] * w for s, w in pw.items() if s in proj)
-        out["value_sd"] = np.sqrt(sum((proj[s + "_sd"] * w) ** 2 for s, w in pw.items() if s + "_sd" in proj))
+        out["value_sd"] = np.sqrt(sum((proj[s + "_sd"] * w) ** 2 for s, w in pw.items() if s + "_sd" in proj)) \
+            / np.sqrt(proj["n_eff"].clip(lower=1))
+        repl = float(out["value"].nlargest(num_teams * roster_size).min())
+        out["var"] = out["value"] - repl
+        db.kv_set("value_scales", {"scales": {}, "replacement": repl, "pcts": proj.attrs["pcts"]})
         return out
     eligible = proj[(proj["min"] >= 12) & (proj["n_games"] >= 3)]
     pool = eligible.index
@@ -207,9 +211,19 @@ def value_players(proj: pd.DataFrame, num_teams=10, roster_size=13) -> pd.DataFr
             z[k] = sign * (proj[col] - mu) / sd
         total = sum(z.values())
         pool = total.loc[eligible.index].nlargest(num_teams * roster_size).index
+    scales = {}
     for k in cats:
         out["z_" + k] = z[k]
+        col = cat_column(k)
+        scales[k] = (float(proj.loc[pool, col].mean()), float(proj.loc[pool, col].std() or 1.0))
     out["value"] = total
+    # Replacement level = the last rostered player. Value above replacement (var) is the unit
+    # that adds up over games: a game at replacement level is worth 0, same as a missed game.
+    repl = float(total.loc[pool].min())
+    out["var"] = total - repl
+    out.attrs["scales"] = scales
+    out.attrs["replacement"] = repl
+    db.kv_set("value_scales", {"scales": scales, "replacement": repl, "pcts": proj.attrs["pcts"]})
     # uncertainty of the value estimate itself (shrinks with effective games observed)
     sds = []
     for k in cats:
@@ -218,6 +232,34 @@ def value_players(proj: pd.DataFrame, num_teams=10, roster_size=13) -> pd.DataFr
         sds.append((proj[col + "_sd"] / sd_pool) ** 2)
     out["value_sd"] = np.sqrt(sum(sds)) / np.sqrt(proj["n_eff"].clip(lower=1))
     return out
+
+
+def line_values(lines: pd.DataFrame) -> pd.Series:
+    """Value above replacement of actual box-score lines, on the same scale as projections."""
+    sc = db.kv_get("value_scales")
+    if scoring_mode() == "points":
+        pw = point_weights()
+        return sum(lines[s] * w for s, w in pw.items() if s in lines) - sc["replacement"]
+    lines = _with_linear_ratio_stats(lines, sc["pcts"])
+    total = 0
+    for k, (mu, sd) in sc["scales"].items():
+        sign = 1 if config.CATEGORY_DEFS[k][4] else -1
+        total = total + sign * (lines[cat_column(k)] - mu) / sd
+    return total - sc["replacement"]
+
+
+_game_sd_cache = {}
+
+
+def game_value_sd(logs: pd.DataFrame) -> float:
+    """Typical single-game spread of value: median per-player std over recent games."""
+    key = (len(logs), scoring_mode())
+    if key not in _game_sd_cache:
+        recent = logs.sort_values("game_date").groupby("nba_id").tail(30)
+        lv = line_values(recent)
+        sds = lv.groupby(recent["nba_id"]).std().dropna()
+        _game_sd_cache[key] = float(sds.median()) if len(sds) else 3.0
+    return _game_sd_cache[key]
 
 
 # ---------------------------------------------------------------- analytic weekly odds

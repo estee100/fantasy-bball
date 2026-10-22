@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS moves (
     add_id INTEGER, drop_id INTEGER, pred_week_dwin REAL, pred_season_dwins REAL,
     confidence REAL, raw_confidence REAL, rationale TEXT,
     status TEXT,              -- suggested | executed | dismissed | manual
+    kind TEXT,                -- stream (judged on rest of week) | upgrade (judged over 21 days)
+    horizon_end TEXT,
     executed_at TEXT, eval TEXT, evaluated_at TEXT,
     UNIQUE (add_id, drop_id, week)
 );
@@ -98,12 +100,20 @@ def cursor():
         if _conn is None:
             _conn = connect()
             _conn.executescript(SCHEMA)
+            _migrate(_conn)
         try:
             yield _conn
             _conn.commit()
         except Exception:
             _conn.rollback()
             raise
+
+
+def _migrate(conn):
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(moves)")}
+    for col in ("kind", "horizon_end"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE moves ADD COLUMN {col} TEXT")
 
 
 def kv_get(key, default=None):

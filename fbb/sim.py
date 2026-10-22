@@ -275,17 +275,40 @@ def season_strength(ctx: Context, pids, opp_dist=None) -> float:
     return model.matchup_odds(dist, opp_dist)[0]
 
 
-def team_season_dist(ctx: Context, pids):
-    """Typical-week distribution. Only active slots score, so the best players' games are
-    kept up to active_slots x 3.5 games (a rough average week), worst players' games dropped."""
-    mult = {p: model.production_multiplier(p, ctx.events, ctx.params) for p in pids}
+SEASON_LOOKAHEAD_DAYS = 28
+
+
+def lookahead_dates(ctx: Context) -> list:
+    if "_look" not in ctx._pools:
+        start = max(date.fromisoformat(ctx.week_end) + timedelta(days=1), date.today())
+        ctx._pools["_look"] = [(start + timedelta(days=i)).isoformat() for i in range(SEASON_LOOKAHEAD_DAYS)]
+    return ctx._pools["_look"]
+
+
+def used_games_per_week(ctx: Context, pids) -> dict:
+    """Expected games each player actually gets *started* in a typical upcoming week: walk
+    the next 4 weeks of real schedule and fill active slots day by day, best player first.
+    Bench players count when the starters are off, which is most nights."""
+    dates = lookahead_dates(ctx)
+    tds = {p: team_dates(ctx, ctx.team_of(p)) for p in pids}
+    avail = {p: model.ros_availability(p, ctx.injuries, ctx.events) for p in pids}
     ranked = sorted(pids, key=lambda p: -ctx.values["value"].get(p, -99))
-    games, used, cap = {}, 0.0, ctx.active_slots * 3.5
-    for p in ranked:
-        g = min(expected_week_games(ctx, p), max(cap - used, 0))
-        games[p] = g
-        used += g
-    return model.team_week_dist(games, ctx.proj, mult)
+    used = {p: 0.0 for p in pids}
+    for d in dates:
+        slots = float(ctx.active_slots)
+        for p in ranked:
+            if d in tds[p] and slots > 0:
+                g = min(avail[p], slots)
+                used[p] += g
+                slots -= g
+    weeks = len(dates) / 7
+    return {p: u / weeks for p, u in used.items()}
+
+
+def team_season_dist(ctx: Context, pids):
+    """Typical-week distribution over the upcoming schedule, active-slot cap included."""
+    mult = {p: model.production_multiplier(p, ctx.events, ctx.params) for p in pids}
+    return model.team_week_dist(used_games_per_week(ctx, pids), ctx.proj, mult)
 
 
 def league_average_dist(ctx: Context):
