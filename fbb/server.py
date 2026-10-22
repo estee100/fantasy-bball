@@ -185,11 +185,12 @@ def player(pid: int):
 
 
 @app.get("/api/players/search")
-def search(q: str, limit: int = 12):
+def search(q: str, limit: int = 12, scope: str = "all"):
     ctx = pipeline.context()
     ql = q.lower()
     owner = {p: k for k, ids in ctx.rosters.items() for p in ids}
-    hits = [p for p in ctx.players.index if ql in str(ctx.players["name"].get(p, "")).lower()]
+    pool = ctx.rosters.get(ctx.my_key, []) if scope == "mine" else         [p for p in ctx.players.index if owner.get(p) != ctx.my_key] if scope == "others" else ctx.players.index
+    hits = [p for p in pool if ql in str(ctx.players["name"].get(p, "")).lower()]
     hits.sort(key=lambda p: -ctx.values["var"].get(p, -99))
     return _json([{"nba_id": int(p), "name": ctx.name(p), "team": ctx.team_of(p),
                    "owner": ctx.teams.get(owner.get(p), {}).get("name", "Free agent")} for p in hits[:limit]])
@@ -203,7 +204,10 @@ class TradeIn(BaseModel):
 @app.post("/api/trade")
 def trade(t: TradeIn):
     ctx = pipeline.context()
-    res = recommend.evaluate_trade(ctx, t.give, t.get)
+    try:
+        res = recommend.evaluate_trade(ctx, t.give, t.get)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     res["other_team_name"] = ctx.teams.get(res["other_team"], {}).get("name")
     return _json(res)
 

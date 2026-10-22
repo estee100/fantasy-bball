@@ -163,7 +163,15 @@ def start_sit_today(ctx) -> list:
 def evaluate_trade(ctx, give: list, get: list) -> dict:
     """Effect of a trade on both sides, in expected matchup wins over the rest of the season."""
     mine = ctx.rosters.get(ctx.my_key, [])
-    other_key = next((k for k, ids in ctx.rosters.items() if set(get) & set(ids)), None)
+    not_mine = [p for p in give if p not in mine]
+    if not_mine:
+        raise ValueError("You don't own: " + ", ".join(ctx.name(p) for p in not_mine))
+    owners = {k for k, ids in ctx.rosters.items() for p in get if p in ids}
+    if ctx.my_key in owners:
+        raise ValueError("You already own someone on the 'get' side")
+    if len(owners) > 1:
+        raise ValueError("Players on the 'get' side belong to different teams")
+    other_key = next(iter(owners), None)   # None = they're free agents
     theirs = ctx.rosters.get(other_key, [])
     rostered = ctx.rostered()
     fa = sorted([p for p in ctx.proj.index if p not in rostered and p in ctx.players.index],

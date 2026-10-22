@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fantasy Hoops HQ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='10' fill='%23eb6834'/%3E%3Cpath d='M2 12h20M12 2v20M5 5c4 4 4 10 0 14M19 5c-4 4-4 10 0 14' stroke='%23000' stroke-width='1.2' fill='none'/%3E%3C/svg%3E">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="var(--opp)"/><path d="M2 12h20M12 2v20M5 5c4 4 4 10 0 14M19 5c-4 4-4 10 0 14" stroke="var(--ink)" stroke-width="1.2" fill="none"/></svg>
+      Fantasy Hoops HQ
+    </div>
+    <div class="league-meta" id="league-meta"></div>
+    <div class="top-actions">
+      <button class="btn ghost" id="ready-btn" aria-expanded="false" title="Data readiness"></button>
+      <span class="small muted num" id="updated"></span>
+      <button class="btn" id="refresh-btn" title="Fetch news, injuries, rosters and re-run the model">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>Refresh
+      </button>
+      <button class="btn ghost" id="theme-btn" title="Toggle theme" aria-label="Toggle theme">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </div>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
+    <button role="tab" data-tab="roster">Rosters</button>
+    <button role="tab" data-tab="league">League</button>
+    <button role="tab" data-tab="news">News <span class="count" id="news-count"></span></button>
+    <button role="tab" data-tab="trade">Trade lab</button>
+    <button role="tab" data-tab="learning">Model &amp; learning</button>
+  </nav>
+</header>
+<div class="card ready-pop hidden" id="ready-pop"></div>
+
+<main>
+  <!-- ======================================================= OVERVIEW -->
+  <section data-panel="overview">
+    <div class="grid cols-4" id="kpis"></div>
+    <div class="grid cols-2 section-gap">
+      <div class="card">
+        <div class="hd"><h2>Category odds this week</h2><span class="sub" id="cat-sub"></span>
+          <div class="right legend"><span><i style="background:var(--div-pos)"></i>Favours you</span><span><i style="background:var(--div-neg)"></i>Favours opponent</span></div></div>
+        <div class="bd"><div class="cat-rows" id="cat-rows"></div></div>
+      </div>
+      <div class="card">
+        <div class="hd"><h2>How many categories you win</h2><span class="sub">share of 2,000 simulated weeks</span></div>
+        <div class="bd"><div class="hist" id="hist" role="img"></div>
+          <div class="small muted" id="hist-note" style="margin-top:8px"></div></div>
+      </div>
+    </div>
+    <div class="grid cols-2 section-gap">
+      <div class="card">
+        <div class="hd"><h2>Recommended moves</h2><span class="sub">ranked by expected matchup wins added</span></div>
+        <div class="bd"><div class="moves" id="moves"></div></div>
+      </div>
+      <div class="card">
+        <div class="hd"><h2>Role alerts</h2><span class="sub">is a player's best skill still being used?</span></div>
+        <div class="bd">
+          <div class="filters" id="alert-filters" style="margin-bottom:10px"></div>
+          <div class="alerts" id="alerts"></div></div>
+      </div>
+    </div>
+    <div class="card section-gap hidden" id="startsit-card">
+      <div class="hd"><h2>Sit today</h2><span class="sub">more of your players have games than you have active slots</span></div>
+      <div class="bd" id="startsit"></div>
+    </div>
+  </section>
+
+  <!-- ======================================================= ROSTERS -->
+  <section data-panel="roster" class="hidden">
+    <div class="card">
+      <div class="hd"><h2 id="my-roster-title">My roster</h2><span class="sub">per-game projections · value is above replacement level</span></div>
+      <div class="bd tbl-wrap"><table id="my-roster"></table></div>
+    </div>
+    <div class="card section-gap">
+      <div class="hd"><h2 id="opp-roster-title">Opponent</h2></div>
+      <div class="bd tbl-wrap"><table id="opp-roster"></table></div>
+    </div>
+  </section>
+
+  <!-- ======================================================= LEAGUE -->
+  <section data-panel="league" class="hidden">
+    <div class="card">
+      <div class="hd"><h2>League category map</h2><span class="sub">rank in a typical week (1 = best) · darker = stronger</span></div>
+      <div class="bd tbl-wrap"><table class="heat" id="heat"></table></div>
+    </div>
+  </section>
+
+  <!-- ======================================================= NEWS -->
+  <section data-panel="news" class="hidden">
+    <div class="grid cols-2">
+      <div class="card">
+        <div class="hd"><h2>News feed</h2><span class="sub" id="news-sub"></span></div>
+        <div class="bd">
+          <div class="filters" id="news-filters" style="margin-bottom:6px"></div>
+          <div id="news"></div></div>
+      </div>
+      <div class="card" style="align-self:start">
+        <div class="hd"><h2>Add a scouting report</h2></div>
+        <div class="bd">
+          <p class="small ink2" style="margin-top:0">Paste a scouting report or analysis article. Claude extracts each player's strengths, weaknesses and role, which then appear in the player view. You can also drop <code>.txt</code>/<code>.md</code> files into <code>data/reports/</code>; they're picked up daily.</p>
+          <textarea id="report-text" placeholder="Paste report text…"></textarea>
+          <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+            <input id="report-source" class="btn" style="flex:1;cursor:text" placeholder="Source (e.g. The Ringer, 2026-10-20)">
+            <button class="btn primary" id="report-btn">Ingest</button>
+          </div>
+          <div class="small muted" id="report-status" style="margin-top:8px"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================= TRADE -->
+  <section data-panel="trade" class="hidden">
+    <div class="grid cols-2-even">
+      <div class="card"><div class="hd"><h2>You give</h2></div>
+        <div class="bd"><div class="picker" id="pick-give"></div></div></div>
+      <div class="card"><div class="hd"><h2>You get</h2></div>
+        <div class="bd"><div class="picker" id="pick-get"></div></div></div>
+    </div>
+    <div style="margin-top:12px"><button class="btn primary" id="trade-btn" disabled>Evaluate trade</button></div>
+    <div class="card section-gap hidden" id="trade-result"></div>
+  </section>
+
+  <!-- ======================================================= LEARNING -->
+  <section data-panel="learning" class="hidden">
+    <div class="grid cols-4" id="learn-kpis"></div>
+    <div class="grid cols-2-even section-gap">
+      <div class="card">
+        <div class="hd"><h2>Is the confidence honest?</h2><span class="sub">predicted vs actual success, scored moves</span></div>
+        <div class="bd"><div class="chart-box"><canvas id="calib-chart"></canvas></div>
+          <div class="small muted" id="calib-note" style="margin-top:8px"></div></div>
+      </div>
+      <div class="card">
+        <div class="hd"><h2>Projection accuracy</h2><span class="sub">out-of-sample error, lower is better</span></div>
+        <div class="bd"><div class="chart-box"><canvas id="bt-chart"></canvas></div>
+          <div class="small muted" id="bt-note" style="margin-top:8px"></div></div>
+      </div>
+    </div>
+    <div class="card section-gap">
+      <div class="hd"><h2>What the model has learned</h2></div>
+      <div class="bd tbl-wrap"><table id="params"></table></div>
+    </div>
+    <div class="card section-gap">
+      <div class="hd"><h2>Move ledger</h2><span class="sub">every suggestion and roster change, scored against real box scores</span></div>
+      <div class="bd tbl-wrap"><table id="ledger"></table></div>
+    </div>
+  </section>
+</main>
+
+<div id="drawer-root"></div>
+<div class="tooltip hidden" id="tip"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

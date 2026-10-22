@@ -56,13 +56,14 @@ def _welch(recent: pd.Series, base: pd.Series):
 
 
 def split_windows(logs: pd.DataFrame, pid, as_of=None):
-    g = logs[logs["nba_id"] == pid]
     if as_of is not None:
-        g = g[g["game_date"] < pd.Timestamp(as_of)]
-    g = g.sort_values("game_date")
+        logs = logs[logs["game_date"] < pd.Timestamp(as_of)]
+    # "recent" always means the league's current season: a player who hasn't played yet
+    # must not have the end of last season presented as his current role
+    season = logs["season"].max()
+    g = logs[logs["nba_id"] == pid].sort_values("game_date")
     if g.empty:
         return None, None
-    season = g["season"].iloc[-1]
     recent = g[g["season"] == season].tail(RECENT_N)
     base = g.drop(recent.index).tail(BASELINE_N)
     if len(recent) < MIN_RECENT or len(base) < 10:
