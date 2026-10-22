@@ -45,6 +45,7 @@ class Context:
     today: str | None = None                    # backtests replay the past: "today" is the week start
     raw_proj: object = None                     # the model's own projections, before your takes
     takes: dict = field(default_factory=dict)   # pid -> scale factor from your take
+    defense: dict = field(default_factory=dict)  # team -> opponent factor (1.0 = average defense)
     _pools: dict = field(default_factory=dict)
     _team_dates: dict = field(default_factory=dict)
 
@@ -91,6 +92,9 @@ def load_context() -> Context:
                   roster_size=roster_size, num_teams=num_teams,
                   weeks_remaining=db.kv_get("weeks_remaining", default_weeks_remaining()),
                   wtd=db.kv_get("week_to_date") or {}, raw_proj=raw_proj, takes=takes)
+    if params.get("opp_adjust"):
+        from . import matchups
+        ctx.defense = matchups.defense_table(logs, date.today().isoformat(), params.get("opp_k", 80))
     return ctx
 
 
@@ -300,7 +304,8 @@ def simulate_team(ctx: Context, pids, dates, n_sims=2000, seed=7, wtd=None) -> n
             rng = np.random.default_rng([seed, int(pid), di])
             lines, probs = _pool(ctx, pid)
             masks.append(rng.random(n_sims) < sched[pid][d])
-            draws.append(lines[rng.choice(len(lines), n_sims, p=probs)] * form[pid])
+            draws.append(lines[rng.choice(len(lines), n_sims, p=probs)] * form[pid]
+                         * opp_factor(ctx, ctx.team_of(pid), d))
         masks = np.stack(masks, 1)
         # Real lineup slots (PG/SG/G/SF/PF/F/C/C/Util/Util): for each pattern of who's
         # available in a simulated day, fill the slots best-first with position eligibility.
@@ -525,10 +530,12 @@ def team_dist(ctx: Context, pids, dates, per_week=True) -> dict:
     avail = {p: model.ros_availability(p, ctx.injuries, ctx.events) for p in pids}
     ranked = sorted(pids, key=lambda p: -ctx.values["value"].get(p, -99))
     used = {p: 0.0 for p in pids}
+    used_adj = {p: 0.0 for p in pids}
     nvar = {p: 0.0 for p in pids}
     for d in dates:
         for p, (s, considered) in expected_starts(ctx, pids, d, avail).items():
             used[p] += s
+            used_adj[p] += s * opp_factor(ctx, ctx.team_of(p), d)
             if considered:
                 nvar[p] += avail[p] * (1 - avail[p])  # does he play at all: the games coin flip
     scale = 7 / len(dates) if per_week and dates else 1.0
@@ -551,7 +558,7 @@ def team_dist(ctx: Context, pids, dates, per_week=True) -> dict:
                 col = model.cat_column(k)
                 pm, ps = m * row[col], row[col + "_sd"] ** 2
             g, gv = used[p] * scale, nvar[p] * scale
-            mu += g * pm
+            mu += used_adj[p] * scale * pm   # same games, weighted by the defenses they face
             var += g * ps + gv * pm * pm + (form_sd * g * pm) ** 2
         res[k] = (mu, var)
     return res
@@ -602,3 +609,20 @@ def league_average_dist(ctx: Context):
             teams = [t[:ctx.roster_size] for t in teams]
             ctx._pools["_avg"] = model.avg_opponent_dist([team_season_dist(ctx, t) for t in teams])
     return ctx._pools["_avg"]
+
+
+
+def opp_factor(ctx, team, d) -> float:
+    """Opponent defense multiplier for `team`'s game on day d (1.0 when off or unknown)."""
+    if not ctx.defense or not isinstance(team, str):
+        return 1.0
+    if "_opp_of" not in ctx._pools:
+        with db.cursor() as c:
+            rows = c.execute("SELECT game_date, home, away FROM schedule").fetchall()
+        m = {}
+        for r in rows:
+            m[(r["home"], r["game_date"])] = r["away"]
+            m[(r["away"], r["game_date"])] = r["home"]
+        ctx._pools["_opp_of"] = m
+    opp = ctx._pools["_opp_of"].get((team, d))
+    return float(ctx.defense.get(opp, 1.0)) if opp else 1.0

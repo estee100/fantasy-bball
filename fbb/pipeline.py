@@ -97,6 +97,8 @@ def refresh(daily=False) -> dict:
             last_bt = db.kv_get("matchup_backtest") or {}
             if not last_bt or (datetime.now(timezone.utc) - datetime.fromisoformat(last_bt["created"])).days >= 7:
                 from . import backtest  # weekly: re-check calibration of win probabilities
+                from . import matchups
+                _step(status, "opp_adjust_check", matchups.recheck_and_store)
                 _step(status, "matchup_backtest", lambda: backtest.store(backtest.calibrate()) or "ok")
             _step(status, "scouting_folder", lambda: len(news.ingest_report_folder()))
             db.kv_set("daily_done", date.today().isoformat())

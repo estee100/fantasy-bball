@@ -32,14 +32,14 @@
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
     <button role="tab" data-tab="roster">Rosters</button>
+    <button role="tab" data-tab="check">Pickups</button>
+    <button role="tab" data-tab="trade">Trades</button>
+    <button role="tab" data-tab="watch">Watchlist</button>
+    <button role="tab" data-tab="history">History</button>
     <button role="tab" data-tab="league">League</button>
     <button role="tab" data-tab="news">News <span class="count" id="news-count"></span></button>
-    <button role="tab" data-tab="check">Pickup check</button>
-    <button role="tab" data-tab="watch">Watchlist</button>
-    <button role="tab" data-tab="trade">Trade lab</button>
-    <button role="tab" data-tab="history">History</button>
-    <button role="tab" data-tab="learning">Model &amp; learning</button>
-    <button role="tab" data-tab="setup">League setup</button>
+    <button role="tab" data-tab="learning">Model</button>
+    <button role="tab" data-tab="setup">Setup</button>
   </nav>
 </header>
 <div class="card ready-pop hidden" id="ready-pop"></div>
@@ -49,6 +49,11 @@
   <section data-panel="overview">
     <div class="note warn-banner hidden" id="rosters-banner"></div>
     <div class="grid cols-4" id="kpis"></div>
+    <div class="card section-gap" id="lineup-card">
+      <div class="hd"><h2>Best lineup</h2><span class="sub" id="lineup-sub">legal lineup with the most expected points, by day</span>
+        <div class="right filters" id="lineup-days"></div></div>
+      <div class="bd" id="lineup"></div>
+    </div>
     <div class="grid cols-2 section-gap">
       <div class="card">
         <div class="hd"><h2 id="cat-title">Category odds this week</h2><span class="sub" id="cat-sub"></span>
@@ -72,11 +77,6 @@
           <div class="filters" id="alert-filters" style="margin-bottom:10px"></div>
           <div class="alerts" id="alerts"></div></div>
       </div>
-    </div>
-    <div class="card section-gap" id="lineup-card">
-      <div class="hd"><h2>Best lineup</h2><span class="sub" id="lineup-sub">legal lineup with the most expected points, by day</span>
-        <div class="right filters" id="lineup-days"></div></div>
-      <div class="bd" id="lineup"></div>
     </div>
   </section>
 

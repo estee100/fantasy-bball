@@ -63,6 +63,12 @@ def _context(logs_all, ws, params, num_teams, roster_size, active_slots):
                       week_end=we.date().isoformat(), active_slots=active_slots, roster_size=roster_size,
                       num_teams=num_teams, weeks_remaining=0, wtd={})
     ctx.today = ctx.week_start
+    if params.get("opp_adjust"):
+        from . import matchups
+        ctx.defense = matchups.defense_table(logs_all, ws, params.get("opp_k", 80))
+        s_games = logs_all[(logs_all["game_date"] >= ws) & (logs_all["game_date"] <= ws + pd.Timedelta(days=6))]
+        ctx._pools["_opp_of"] = {(t, d.strftime("%Y-%m-%d")): o for t, d, o in
+                                 zip(s_games["team"], s_games["game_date"], matchups.opponent_of(s_games["matchup"]))}
     season = logs_all[logs_all["game_date"] >= ws]["season"].iloc[0]
     s = logs_all[logs_all["season"] == season]
     # the schedule is known in advance, so using the season's game dates is not look-ahead

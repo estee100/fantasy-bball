@@ -168,7 +168,7 @@ function renderKPIs() {
       tiles.push(kpi("Expected categories won", `${fmt(exp, 1)} <small>of ${L.categories.length}</small>`,
         toss.length ? `Toss-ups: ${esc(toss.join(", "))}` : "No toss-up categories", exp / L.categories.length));
     }
-  } else tiles.push(kpi("Win probability this week", "–", S.manual ? "pick this week's opponent in League setup" : "run a refresh", null));
+  } else tiles.push(kpi("Win probability this week", "–", S.manual ? "pick this week's opponent in Setup" : "run a refresh", null));
   if (rec?.base) {
     const table = S.league_table || [];
     const rank = table.findIndex((t) => t.is_mine) + 1;
@@ -205,7 +205,7 @@ function renderCats() {
   if (!m) {
     $("#cat-sub").textContent = "";
     el.innerHTML = S.manual
-      ? `<div class="empty">Pick this week's opponent in <a href="#setup" onclick="showTab('setup');return false">League setup</a> to see matchup odds.</div>`
+      ? `<div class="empty">Pick this week's opponent in <a href="#setup" onclick="showTab('setup');return false">Setup</a> to see matchup odds.</div>`
       : `<div class="empty">No matchup yet.</div>`;
     return;
   }
@@ -482,7 +482,8 @@ async function openPlayer(pid) {
   const zmax = Math.max(2, ...Object.values(z).map(Math.abs));
   $(".drawer", root).innerHTML = `
     <button class="btn ghost close" aria-label="Close">${ICON.x.replace("<svg", '<svg style="width:16px;height:16px"')}</button>
-    <h3>${esc(p.name)} <button class="btn ghost small" id="drawer-watch" style="margin-left:8px;vertical-align:middle">☆ Watch</button></h3>
+    <h3>${esc(p.name)} <button class="btn ghost small" id="drawer-watch" style="margin-left:8px;vertical-align:middle">☆ Watch</button>
+      ${(S.roster || []).some((r) => r.nba_id === pid) ? "" : '<button class="btn ghost small" id="drawer-check" style="vertical-align:middle">Check as pickup</button>'}</h3>
     <div class="ink2" style="margin-top:4px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">${esc(p.team || "")}${p.positions ? " · " + esc(p.positions) : ""} ${injuryStatus(p.injury)}
       <span class="muted small">${p.n_games} games in sample · ${p.games_left} left this week</span></div>
     ${p.injury?.comment ? `<div class="note" style="margin-top:10px">${esc(p.injury.comment)}</div>` : ""}
@@ -507,6 +508,8 @@ async function openPlayer(pid) {
       <tbody>${(p.game_log || []).map((g) => `<tr><td class="num">${esc(g.date)}</td><td class="muted">${esc(g.matchup.slice(-6))}</td>${["min", "pts", "reb", "ast", "stl", "blk", "fg3m", "tov"].map((k) => `<td class="r num">${Math.round(g[k])}</td>`).join("")}<td class="r num">${esc(g.fg)}</td></tr>`).join("")}</tbody></table></div>`;
   $(".drawer .close", root).addEventListener("click", close);
   bindTakeBox(p, pid);
+  const chk = $("#drawer-check");
+  if (chk) chk.addEventListener("click", () => { close(); showTab("check"); checkPlayer(pid); });
   $("#drawer-watch").addEventListener("click", async (e) => {
     const r = await watchPlayer(pid);
     e.target.textContent = r.error ? r.error : "★ Watching";
@@ -747,7 +750,7 @@ function renderBanner() {
   else if (!M.opponent_key) msg = "Pick this week's opponent in League setup to see matchup odds.";
   b.classList.toggle("hidden", !msg);
   b.innerHTML = msg ? `${ICON.warn.replace("<svg", '<svg style="width:16px;height:16px;color:var(--warning)"')}<span>${esc(msg)}</span>
-    <button class="btn" style="margin-left:auto" onclick="showTab('setup')">League setup</button>` : "";
+    <button class="btn" style="margin-left:auto" onclick="showTab('setup')">Setup</button>` : "";
 }
 
 let setupData = null;
