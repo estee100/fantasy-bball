@@ -264,7 +264,7 @@ function renderMoves() {
         <span class="drop"><span class="sign">−</span> <a href="#" data-pid="${m.drop}">${esc(m.drop_name)}</a> <span class="pteam">${esc(m.drop_team || "")} · ${m.drop_games} g</span></span>
       </div>
       <div class="nums num">
-        <div data-tip="Change in this week's win probability (same simulated games for everyone else)"><b>${signed(m.week_dwin * 100, 1)}</b><span>pp this week</span></div>
+        <div data-tip="Change in this week's win probability (same simulated games for everyone else). Within about ±1.5pp is simulation noise, shown as ≈0."><b>${Math.abs(m.week_dwin * 100) < 1.5 ? "≈0" : signed(m.week_dwin * 100, 1)}</b><span>pp this week</span></div>
         <div data-tip="Extra matchup wins over the rest of the season (future weeks discounted)"><b>${signed(m.season_dwins, 2)}</b><span>wins ROS</span></div>
       </div>
       <ul>${(m.rationale || []).map((r) => `<li>${esc(r)}</li>`).join("")}</ul>

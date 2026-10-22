@@ -162,7 +162,13 @@ Fields:
 
 def _client():
     import anthropic
-    return anthropic.Anthropic(api_key=config.ANTHROPIC_KEY) if config.ANTHROPIC_KEY else None
+    if not config.ANTHROPIC_KEY:
+        return None
+    headers = {"anthropic-workspace-id": config.ANTHROPIC_WORKSPACE_ID} if config.ANTHROPIC_WORKSPACE_ID else None
+    return anthropic.Anthropic(api_key=config.ANTHROPIC_KEY, default_headers=headers)
+
+
+NEEDS_CLAUDE = 2  # processed by the keyword fallback while Claude was failing; re-run when it works
 
 
 def relevant_player_ids() -> set:
@@ -174,8 +180,9 @@ def relevant_player_ids() -> set:
 
 def extract_events(batch_size=15, max_batches=4) -> int:
     """Run unprocessed, player-matched news through Claude (or the keyword tagger without a key)."""
+    states = "(0, 2)" if _client() and not db.kv_get("claude_error") else "(0)"
     with db.cursor() as c:
-        rows = c.execute("SELECT * FROM news WHERE processed=0 AND player_ids != '[]' "
+        rows = c.execute(f"SELECT * FROM news WHERE processed IN {states} AND player_ids != '[]' "
                          "ORDER BY published DESC LIMIT ?", (batch_size * max_batches,)).fetchall()
     if not rows:
         return 0
@@ -185,11 +192,20 @@ def extract_events(batch_size=15, max_batches=4) -> int:
     with db.cursor() as c:
         c.executemany("UPDATE news SET processed=1 WHERE id=?", [(i,) for i in skip])
     client = _client()
+    if client and db.kv_get("claude_error"):
+        client = None  # a config error is waiting on you (see data status); retried after a key change
     n = 0
     for i in range(0, len(todo), batch_size):
         batch = todo[i:i + batch_size]
-        events = _claude_extract(client, batch) if client else _keyword_extract(batch)
-        n += _store_events(batch, events, "claude" if client else "keywords")
+        if client:
+            events = _claude_extract(client, batch)
+            if events == "config_error":
+                client = None  # stop calling for this cycle; fall through to keywords
+            else:
+                n += _store_events(batch, events, "claude")
+                continue
+        fallback = NEEDS_CLAUDE if _client() else 1
+        n += _store_events(batch, _keyword_extract(batch), "keywords", processed=fallback)
     return n
 
 
@@ -211,12 +227,21 @@ def _claude_extract(client, batch):
     except anthropic.RateLimitError:
         log.warning("Claude rate limited; will retry next cycle")
         return None
+    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError, anthropic.BadRequestError,
+            anthropic.NotFoundError) as e:
+        # won't fix itself: surface it on the dashboard, use keywords meanwhile
+        msg = e.message if hasattr(e, "message") else str(e)
+        log.error("Claude configuration error %s: %s", e.status_code, msg)
+        db.kv_set("claude_error", {"status": e.status_code, "message": str(msg)[:300], "at": db.now_iso(),
+                                   "key_tail": config.ANTHROPIC_KEY[-6:], "workspace": config.ANTHROPIC_WORKSPACE_ID})
+        return "config_error"
     except anthropic.APIStatusError as e:
         log.error("Claude API error %s: %s", e.status_code, e.message)
         return None
     except anthropic.APIConnectionError:
         log.warning("Claude unreachable; will retry next cycle")
         return None
+    db.kv_set("claude_error", None)
     if resp.stop_reason == "refusal" or resp.parsed_output is None:
         log.warning("extraction declined/unparsed (stop_reason=%s); marking batch processed", resp.stop_reason)
         return []
@@ -258,7 +283,7 @@ def _keyword_extract(batch):
     return out
 
 
-def _store_events(batch, events, method) -> int:
+def _store_events(batch, events, method, processed=1) -> int:
     if events is None:  # transient failure: leave unprocessed for the next cycle
         return 0
     idx = NameIndex()
@@ -269,8 +294,9 @@ def _store_events(batch, events, method) -> int:
     with db.cursor() as c:
         for r in batch:
             evs = by_item.get(r["id"], [])
-            c.execute("UPDATE news SET processed=1, extracted=? WHERE id=?",
-                      (json.dumps({"method": method, "events": [e.model_dump() for e in evs]}), r["id"]))
+            c.execute("DELETE FROM news_events WHERE news_id=?", (r["id"],))  # re-runs replace, not duplicate
+            c.execute("UPDATE news SET processed=?, extracted=? WHERE id=?",
+                      (processed, json.dumps({"method": method, "events": [e.model_dump() for e in evs]}), r["id"]))
             for e in evs:
                 pid = idx.resolve(e.player)
                 if not pid:

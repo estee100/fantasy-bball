@@ -64,6 +64,9 @@ def refresh(daily=False) -> dict:
         fa = [int(p) for p in ctx.values.sort_values("var", ascending=False).index
               if p not in ctx.rostered()][:60]
         db.kv_set("top_free_agents", fa)
+        err = db.kv_get("claude_error")
+        if err and (err.get("key_tail") != config.ANTHROPIC_KEY[-6:] or err.get("workspace") != config.ANTHROPIC_WORKSPACE_ID):
+            db.kv_set("claude_error", None)  # settings changed since the failure: try again
         _step(status, "news_extraction", news.extract_events)
         ctx = context(reload=True)  # pick up new news events
 
@@ -178,6 +181,11 @@ def readiness() -> list:
                        "detail": f"{len(others)} of {info['num_teams'] - 1} other teams pasted"
                                  + (f"; over a week old: {', '.join(stale)}" if stale else "")
                                  + ("" if info["opponent_key"] else "; no opponent picked")})
-    checks.append({"name": "News extraction", "ok": bool(config.ANTHROPIC_KEY),
-                   "detail": "Claude" if config.ANTHROPIC_KEY else "keyword tagger only (no ANTHROPIC_API_KEY)"})
+    err = db.kv_get("claude_error")
+    if err:
+        checks.append({"name": "News extraction", "ok": False,
+                       "detail": f"Claude key problem ({err['status']}): {err['message'][:160]} — using keywords meanwhile"})
+    else:
+        checks.append({"name": "News extraction", "ok": bool(config.ANTHROPIC_KEY),
+                       "detail": "Claude" if config.ANTHROPIC_KEY else "keyword tagger only (no ANTHROPIC_API_KEY)"})
     return checks

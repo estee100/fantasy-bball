@@ -17,6 +17,8 @@ YAHOO_LEAGUE_ID = os.getenv("YAHOO_LEAGUE_ID", "")
 # Must match the Redirect URI registered on the Yahoo app exactly
 YAHOO_REDIRECT_URI = os.getenv("YAHOO_REDIRECT_URI", "https://localhost:8080")
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+# Only needed for an organization-level key that isn't scoped to a workspace
+ANTHROPIC_WORKSPACE_ID = os.getenv("ANTHROPIC_WORKSPACE_ID", "")
 SEASON = os.getenv("NBA_SEASON", "2026-27")
 PRIOR_SEASON = os.getenv("NBA_PRIOR_SEASON", "2025-26")
 

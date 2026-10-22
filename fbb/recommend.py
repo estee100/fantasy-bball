@@ -50,7 +50,7 @@ def horizon_edge(ctx, add, drop, dates, kind="upgrade"):
     return edge, _phi(edge / max(math.hypot(sa, sdd), 1e-6))
 
 
-def recommend(ctx: sim.Context, n_sims=1000, top=8, seed=11) -> dict:
+def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11) -> dict:
     mine = ctx.rosters.get(ctx.my_key, [])
     if not mine:
         return {"moves": [], "base": None}
