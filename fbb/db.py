@@ -114,6 +114,9 @@ def cursor():
 
 
 def _migrate(conn):
+    pcols = {r[1] for r in conn.execute("PRAGMA table_info(players)")}
+    if "espn_pos" not in pcols:
+        conn.execute("ALTER TABLE players ADD COLUMN espn_pos TEXT")
     cols = {r[1] for r in conn.execute("PRAGMA table_info(moves)")}
     for col in ("kind", "horizon_end", "urgency"):
         if col not in cols:

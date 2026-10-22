@@ -71,9 +71,10 @@
           <div class="alerts" id="alerts"></div></div>
       </div>
     </div>
-    <div class="card section-gap hidden" id="startsit-card">
-      <div class="hd"><h2>Sit today</h2><span class="sub">more of your players have games than you have active slots</span></div>
-      <div class="bd" id="startsit"></div>
+    <div class="card section-gap" id="lineup-card">
+      <div class="hd"><h2>Best lineup</h2><span class="sub" id="lineup-sub">legal lineup with the most expected points, by day</span>
+        <div class="right filters" id="lineup-days"></div></div>
+      <div class="bd" id="lineup"></div>
     </div>
   </section>
 
@@ -92,7 +93,7 @@
   <!-- ======================================================= LEAGUE -->
   <section data-panel="league" class="hidden">
     <div class="card">
-      <div class="hd"><h2>League category map</h2><span class="sub">rank in a typical week (1 = best) · darker = stronger</span></div>
+      <div class="hd"><h2 id="heat-title">League category map</h2><span class="sub" id="heat-sub">rank in a typical week · 1 = best, shown in the strongest colour</span></div>
       <div class="bd tbl-wrap"><table class="heat" id="heat"></table></div>
     </div>
   </section>

@@ -446,3 +446,24 @@ def watch_remove(wid: int):
     from . import watchlist
     watchlist.remove(wid)
     return {"ok": True}
+
+
+
+# ---------------------------------------------------------------- lineup optimizer
+
+@app.get("/api/lineup")
+def lineup_get():
+    from . import lineup
+    ctx = pipeline.context()
+    if not ctx.my_key:
+        return _json({"days": []})
+    return _json(lineup.week_plan(ctx))
+
+
+@app.post("/api/lineup/apply")
+def lineup_apply():
+    from . import lineup
+    ctx = pipeline.context()
+    res = lineup.apply_today(ctx)
+    _manual_changed()
+    return _json(res)

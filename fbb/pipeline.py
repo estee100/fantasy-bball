@@ -5,7 +5,7 @@ import time
 import traceback
 from datetime import date, datetime, timedelta, timezone
 
-from . import config, db, learning, model, news, nba, recommend, roles, sim
+from . import config, db, learning, model, news, nba, recommend, roles, sim  # noqa: F401
 
 log = logging.getLogger(__name__)
 _lock = threading.Lock()
@@ -47,6 +47,7 @@ def refresh(daily=False) -> dict:
         if daily or db.kv_get("daily_done") != date.today().isoformat():
             _step(status, "player_directory", nba.ingest_player_directory)
             _step(status, "schedule", nba.ingest_schedule)
+            _step(status, "espn_positions", nba.ingest_espn_positions)
             for season in (config.PRIOR_SEASON, config.PRIOR2_SEASON):  # 2 back: tuning only
                 if not _has_season(season):
                     _step(status, f"logs_{season}", nba.ingest_logs, [season])
@@ -119,6 +120,22 @@ def league_table(ctx) -> list:
                      "strength": sim.season_strength(ctx, pids, exclude_key=key) if pids else None,
                      "cats": {k: v[0] for k, v in dist.items()},
                      "record": [ctx.teams.get(key, {}).get(x) for x in ("wins", "losses", "ties")]})
+    if model.scoring_mode() == "points":
+        # one 'category' says nothing new: break each team's typical week into where its
+        # fantasy points come from (turnovers are negative, so higher is still better)
+        pw = model.point_weights()
+        labels = {"pts": "Scoring", "reb": "Rebounds", "ast": "Assists", "stl": "Steals",
+                  "blk": "Blocks", "tov": "Turnovers"}
+        for r in rows:
+            pids = ctx.rosters[r["team_key"]]
+            games = sim.used_games_per_week(ctx, pids)
+            contrib = {}
+            for s, w in pw.items():
+                contrib["fp_" + s] = float(sum(g * ctx.proj.loc[p, s] * w for p, g in games.items()
+                                               if p in ctx.proj.index))
+            r["total_fp"] = r["cats"].get("_points")
+            r["cats"] = contrib
+            r["labels"] = {"fp_" + s: labels.get(s, s.upper()) for s in pw}
     for k in (rows[0]["cats"] if rows else {}):
         higher = config.CATEGORY_DEFS[k][4] if k in config.CATEGORY_DEFS else True
         order = sorted(rows, key=lambda r: -r["cats"][k] if higher else r["cats"][k])

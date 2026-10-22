@@ -114,7 +114,7 @@ function renderAll() {
   renderHist();
   renderMoves();
   renderAlerts();
-  renderStartSit();
+  loadLineup();
   renderRosters();
   renderHeat();
 }
@@ -401,13 +401,19 @@ function renderHeat() {
     const color = darkText ? (light ? "var(--ink-2)" : "#fff") : (light ? "var(--ink)" : "#fff");
     return `background:var(${steps[i]});color:${color}`;
   };
-  el.innerHTML = `<thead><tr><th>Team</th><th class="r">Record</th><th class="r" title="P(win) vs a league-average team in a typical week">Strength</th>
-    ${cats.map((k) => `<th class="r">${esc(k === "_points" ? "PTS" : catLabel(k))}</th>`).join("")}</tr></thead>
+  const lab = (t, k) => t.labels?.[k] || (k === "_points" ? "PTS" : catLabel(k));
+  const points = S.league.scoring_mode === "points";
+  $("#heat-title").textContent = points ? "Where each team's points come from" : "League category map";
+  $("#heat-sub").textContent = points ? "rank by fantasy points from each stat in a typical week · 1 = most, shown in the strongest colour" : "rank in a typical week · 1 = best, shown in the strongest colour";
+  el.innerHTML = `<thead><tr><th>Team</th><th class="r">Record</th><th class="r" title="Expected share of weeks won vs the rest of this league">Strength</th>
+    ${points ? '<th class="r" title="Projected fantasy points in a typical week">FP/wk</th>' : ""}
+    ${cats.map((k) => `<th class="r">${esc(lab(T[0], k))}</th>`).join("")}</tr></thead>
     <tbody>${T.map((t) => `<tr class="${t.is_mine ? "mine" : ""} ${t.is_opp ? "opp" : ""}">
       <td><span class="pname">${esc(t.name)}</span>${t.is_mine ? ' <span class="chip mine">You</span>' : ""}${t.is_opp ? ' <span class="chip">This week</span>' : ""}</td>
       <td class="r num muted">${t.record?.every((x) => x != null) ? t.record.join("-") : "–"}</td>
       <td class="r num"><b>${pct(t.strength)}</b></td>
-      ${cats.map((k) => `<td class="h num" style="${cell(t.ranks[k])}" data-tip="${esc(catLabel(k))}: #${t.ranks[k]} of ${N} (${fmtCat(k, t.cats[k])} in a typical week)">${t.ranks[k]}</td>`).join("")}
+      ${points ? `<td class="r num">${fmt(t.total_fp, 0)}</td>` : ""}
+      ${cats.map((k) => `<td class="h num" style="${cell(t.ranks[k])}" data-tip="${esc(lab(t, k))}: #${t.ranks[k]} of ${N} (${points ? fmt(t.cats[k], 0) + " fantasy pts" : fmtCat(k, t.cats[k])} in a typical week)">${t.ranks[k]}</td>`).join("")}
     </tr>`).join("")}</tbody>`;
 }
 
@@ -966,4 +972,50 @@ async function editRoster(key, change) {
   const r = await fetch("/api/manual/roster", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) { const d = await r.json(); alert(d.detail || "Edit failed"); return; }
   loadEditor(key); loadSetup(); afterManualChange();
+}
+
+/* ------------------------------------------------------------------ lineup optimizer */
+let lineupData = null, lineupDay = 0;
+async function loadLineup() {
+  try { lineupData = await api("/api/lineup"); } catch (e) { return; }
+  renderLineup();
+}
+
+function renderLineup() {
+  const L = lineupData;
+  const el = $("#lineup");
+  if (!L || !L.days?.length) { el.innerHTML = `<div class="empty">No games left this week.</div>`; $("#lineup-days").innerHTML = ""; return; }
+  lineupDay = Math.min(lineupDay, L.days.length - 1);
+  const unit = L.unit === "fantasy pts" ? "pts" : "value";
+  $("#lineup-days").innerHTML = L.days.map((d, i) => {
+    const label = d.date === L.today ? "Today" : new Date(d.date + "T12:00:00").toLocaleDateString(undefined, { weekday: "short" });
+    return `<button aria-pressed="${i === lineupDay}" data-day="${i}">${label}${d.gain > 0.5 ? ` · +${fmt(d.gain, 0)}` : ""}</button>`;
+  }).join("");
+  $$("#lineup-days button").forEach((b) => b.addEventListener("click", () => { lineupDay = +b.dataset.day; renderLineup(); }));
+  const D = L.days[lineupDay];
+  const isToday = D.date === L.today;
+  const changes = D.start.length || D.sit.length;
+  $("#lineup-sub").textContent = `${fmt(D.ev_optimal, 0)} expected ${unit} · ${D.gain > 0.5 ? `+${fmt(D.gain, 1)} vs your current lineup` : "your current lineup is already optimal"}${L.week_gain > 0.5 ? ` · +${fmt(L.week_gain, 0)} over the rest of the week` : ""}`;
+  el.innerHTML = `
+    ${changes && D.gain > 0.5 ? `<div class="note" style="border-left:3px solid var(--serious);margin-bottom:10px"><b>${isToday ? "Change today" : "Planned changes"}:</b>
+      ${D.start.length ? `start ${esc(D.start.join(", "))}` : ""}${D.start.length && D.sit.length ? "; " : ""}${D.sit.length ? `bench ${esc(D.sit.join(", "))}` : ""}
+      <span class="muted">(+${fmt(D.gain, 1)} expected ${unit})</span>
+      ${isToday ? `<button class="btn" id="lineup-apply" style="margin-left:8px">I set this in Yahoo</button>` : ""}</div>` : ""}
+    <div class="tbl-wrap"><table><thead><tr><th>Slot</th><th>Player</th><th>Game</th><th class="r" title="Chance he plays, after injuries and rest risk">Plays</th><th class="r">Exp. ${unit}</th><th></th></tr></thead><tbody>
+    ${D.lineup.map((x) => x.empty ? `<tr><td><span class="slot">${esc(x.slot)}</span></td><td class="muted" colspan="5">empty: nobody eligible with a game</td></tr>` : `<tr>
+      <td><span class="slot">${esc(x.slot)}</span></td>
+      <td><a href="#" data-pid="${x.nba_id}" class="pname">${esc(x.name)}</a> <span class="pteam">${esc(x.positions.join(","))}${x.pos_source !== "yahoo" ? ` (${esc(x.pos_source)})` : ""}</span></td>
+      <td class="small">${esc(x.game || "")}</td><td class="r num small">${pct(x.avail)}</td><td class="r num">${fmt(x.ev, 1)}</td>
+      <td class="small">${x.current_slot === "BN" ? '<span class="delta-up">▲ start</span>' : ""}</td></tr>`).join("")}
+    </tbody></table></div>
+    <div class="small muted" style="margin-top:8px">Bench: ${D.bench.map((b) => `${esc(b.name)} <span class="muted">(${esc(b.reason)})</span>`).join(", ") || "nobody"}</div>
+    ${D.unknown_positions.length ? `<div class="small delta-down" style="margin-top:4px">Unknown positions (Util only): ${esc(D.unknown_positions.join(", "))}. Re-paste that team to fix.</div>` : ""}
+    <div class="small muted" style="margin-top:4px">Yahoo locks each player when his game starts. Set this before tip-off, then press "I set this in Yahoo" so the week-to-date score follows the right starters.</div>`;
+  const ap = $("#lineup-apply");
+  if (ap) ap.addEventListener("click", async () => {
+    await api("/api/lineup/apply", { method: "POST" });
+    ap.textContent = "Saved"; ap.disabled = true;
+    afterManualChange().then(loadLineup);
+  });
+  bindPlayerLinks(el);
 }

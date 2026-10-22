@@ -112,3 +112,30 @@ def team_games(start: str, end: str) -> dict:
         for t in (r["home"], r["away"]):
             out.setdefault(t, []).append(r["game_date"])
     return out
+
+
+def ingest_espn_positions() -> int:
+    """ESPN's listed position for every rostered player. Coarse (often just G/F/C), so it's
+    only the fallback when no Yahoo eligibility is known."""
+    import requests
+    from .news import NameIndex
+    ua = {"User-Agent": "Mozilla/5.0 (fantasy-bball personal dashboard)"}
+    teams = requests.get("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams",
+                         headers=ua, timeout=20).json()["sports"][0]["leagues"][0]["teams"]
+    idx = NameIndex()
+    n = 0
+    with db.cursor() as c:
+        for t in teams:
+            tid = t["team"]["id"]
+            try:
+                roster = requests.get(f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{tid}/roster",
+                                      headers=ua, timeout=20).json().get("athletes", [])
+            except (requests.RequestException, ValueError):
+                continue
+            for a in roster:
+                pid = idx.resolve(a.get("displayName", ""))
+                pos = (a.get("position") or {}).get("abbreviation")
+                if pid and pos:
+                    c.execute("UPDATE players SET espn_pos=? WHERE nba_id=?", (pos, pid))
+                    n += 1
+    return n

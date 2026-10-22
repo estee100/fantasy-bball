@@ -31,6 +31,7 @@ def parse_roster(text: str) -> tuple[list, list]:
     """-> ([(nba_id, slot)], [lines that looked like a player but didn't match])."""
     idx = news.NameIndex()
     found, seen, slot = [], set(), None
+    positions = {}
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
@@ -46,6 +47,9 @@ def parse_roster(text: str) -> tuple[list, list]:
                 seen.add(pid)
                 found.append((pid, slot or "?"))
                 slot = None
+            if m:  # "TEAM - PG,SG": Yahoo's position eligibility, kept for the lineup optimizer
+                positions[pid] = m.group(3)
+    parse_roster.last_positions = positions
     return found, []
 
 
@@ -103,6 +107,8 @@ def set_team(name: str, text: str, mine: bool = False, ctx=None) -> dict:
             c.execute("INSERT INTO fantasy_teams VALUES (?,?,?,?,0,0,0,0)", (key, name, "manual", 1 if mine else 0))
         c.execute("DELETE FROM rosters WHERE team_key=?", (key,))
         c.executemany("INSERT OR REPLACE INTO rosters VALUES (?,?,?)", [(key, pid, slot) for pid, slot in players])
+        for pid, pos in getattr(parse_roster, "last_positions", {}).items():
+            c.execute("UPDATE players SET positions=? WHERE nba_id=?", (pos, pid))
     updated = db.kv_get("manual_updated", {})
     updated[key] = db.now_iso()
     db.kv_set("manual_updated", updated)
