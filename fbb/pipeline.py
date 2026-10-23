@@ -54,9 +54,14 @@ def refresh(daily=False) -> dict:
         _step(status, "game_logs", nba.ingest_logs, [config.SEASON])
         _step(status, "injuries", news.fetch_injuries)
         _step(status, "news", news.fetch_news)
-        if config.yahoo_authorized():
+        if config.yahoo_authorized() and db.kv_get("yahoo_sync_verified"):
             from . import yahoo
             _step(status, "yahoo", yahoo.sync)
+        elif config.yahoo_authorized() and not db.kv_get("yahoo_access_live"):
+            # The sync has never run on real Yahoo data: until it's verified on a copy of the
+            # database, only check whether Yahoo has switched access on (and say so once).
+            from . import yahoo
+            _step(status, "yahoo_probe", yahoo.probe)
         elif not db.kv_get("league_source"):
             from . import demo
             _step(status, "demo_league", demo.build)

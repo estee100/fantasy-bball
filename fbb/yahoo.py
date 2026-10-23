@@ -317,3 +317,20 @@ def sync() -> dict:
         db.kv_set("my_roster_last", now)
     db.kv_set("yahoo_synced", db.now_iso())
     return dict(info, my_key=r["my_key"], unmatched=db.kv_get("unmatched_players", []))
+
+
+
+def probe() -> bool:
+    """Is the Fantasy API answering yet? Records it and alerts once when it starts working."""
+    try:
+        q = query()
+        q.get_league_metadata()
+    except Exception as e:
+        if "not authorized" in str(e):
+            return False
+        raise
+    db.kv_set("yahoo_access_live", db.now_iso())
+    from . import alerts
+    alerts.send("Yahoo API access is on", "The fantasy app can now read your league. Tell Claude so it can verify the sync and switch over.",
+                tags="tada", priority=4)
+    return True
