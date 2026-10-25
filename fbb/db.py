@@ -72,6 +72,13 @@ CREATE TABLE IF NOT EXISTS watchlist (
     id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, nba_id INTEGER, compare_id INTEGER,
     note TEXT, snapshot TEXT, active INTEGER DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS lineup_days (     -- a team's lineup as set on a given day
+    team_key TEXT, day TEXT, nba_id INTEGER, slot TEXT, PRIMARY KEY (team_key, day, nba_id)
+);
+CREATE TABLE IF NOT EXISTS league_moves (    -- every add/drop with its time, any team
+    team_key TEXT, ts TEXT, nba_id INTEGER, kind TEXT, source TEXT,
+    PRIMARY KEY (team_key, ts, nba_id, kind)
+);
 CREATE TABLE IF NOT EXISTS backtests (
     id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, params TEXT, model_err REAL,
     baseline_err REAL, n INTEGER
@@ -168,3 +175,19 @@ def backup(keep=14) -> str:
     for old in sorted(folder.glob("fbb-*.db"))[:-keep]:
         old.unlink()
     return str(target)
+
+
+
+def snapshot_lineup(team_key, day=None):
+    """Record the team's current slots as its lineup for `day` (default today)."""
+    from datetime import date
+    day = day or date.today().isoformat()
+    with cursor() as c:
+        c.execute("DELETE FROM lineup_days WHERE team_key=? AND day=?", (team_key, day))
+        c.execute("INSERT INTO lineup_days SELECT team_key, ?, nba_id, slot FROM rosters WHERE team_key=?", (day, team_key))
+
+
+def add_move(team_key, ts: str, nba_id, kind: str, source: str):
+    """kind: 'add' | 'drop'; ts: ISO datetime with offset."""
+    with cursor() as c:
+        c.execute("INSERT OR IGNORE INTO league_moves VALUES (?,?,?,?,?)", (team_key, ts, int(nba_id), kind, source))

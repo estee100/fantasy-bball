@@ -361,3 +361,37 @@ def test_transaction_log_applies_once_and_only_newer_moves(league_db):
     again = yahoo_log.import_log(text, today=date(2026, 10, 22))
     assert again["applied"] == [] and again["your_moves_logged"] == []
     assert again["already_seen"] >= len(r["applied"]) + len(r["your_moves_logged"])
+
+
+# ---------------------------------------------------------------- week-to-date scoring
+
+def test_was_on_roster_at_tipoff():
+    from datetime import datetime, timezone
+    from fbb.sim import _was_on
+    t = lambda h: datetime(2026, 10, 23, h, tzinfo=timezone.utc)
+    assert _was_on([(t(10), "add")], t(23), False) is True          # added that morning
+    assert _was_on([(t(23), "add")], t(20), True) is False          # added after the game
+    assert _was_on([(t(23), "drop")], t(20), False) is True         # dropped after the game
+    assert _was_on([(t(10), "drop")], t(20), False) is False        # dropped before it
+    assert _was_on([], t(20), True) is True
+
+
+def test_week_to_date_uses_that_days_lineup_not_todays(ctx):
+    """Regression: pressing 'I set this in Yahoo' on a light day used to bench every earlier game."""
+    from fbb import db, sim
+    me = ctx.my_key
+    with db.cursor() as c:
+        c.execute("UPDATE rosters SET slot='BN' WHERE team_key=?", (me,))   # today's lineup: all bench
+    ctx._pools.clear()
+    wtd = sim.estimate_wtd(ctx, ctx.rosters[me], me)
+    played = ctx.logs[(ctx.logs["game_date"] >= ctx.week_start) & ctx.logs["nba_id"].isin(ctx.rosters[me])]
+    if played.empty:
+        import pytest
+        pytest.skip("no games played yet this week")
+    assert wtd["pts"] > 0
+    # a lineup recorded for a past day is honoured: all bench that day -> nothing counts that day
+    d = str(played["game_date"].iloc[0])[:10]
+    db.snapshot_lineup(me, d)
+    ctx._pools.clear()
+    day_pts = played[played["game_date"].astype(str).str[:10] == d]["pts"].sum()
+    assert sim.estimate_wtd(ctx, ctx.rosters[me], me)["pts"] <= wtd["pts"] - day_pts + 1e-6

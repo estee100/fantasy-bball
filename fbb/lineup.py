@@ -245,6 +245,7 @@ def apply_today(ctx, team_key=None) -> dict:
                 continue
             c.execute("UPDATE rosters SET slot=? WHERE team_key=? AND nba_id=?",
                       (started.get(pid, "BN"), team_key, pid))
+    db.snapshot_lineup(team_key, plan["date"])
     return {"ok": True, "started": len(started)}
 
 

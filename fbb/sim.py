@@ -7,7 +7,7 @@ are preserved, which matters for FG%/FT%. Per player-day random streams are seed
 one player, every other player draws identical games and the difference is pure signal.
 """
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -195,22 +195,82 @@ def played_team_dates(ctx: Context) -> set:
     return ctx._team_dates["_played"]
 
 
-def estimate_wtd(ctx: Context, pids) -> dict:
+def estimate_wtd(ctx: Context, pids, team_key=None) -> dict:
     """Week-to-date totals from box scores, used when Yahoo's own numbers aren't available.
-    Approximation: assumes your best players with a game each day were the ones started."""
-    slots = team_slots(ctx).get(team_key_of(ctx, pids), {})
-    if slots and any(s not in ("?", None) for s in slots.values()):
-        # Lineup slots known (pasted from Yahoo): bench/IL players' games don't count.
-        # Slots are as of the paste, so a mid-week lineup change is an approximation.
-        pids = [p for p in pids if slots.get(p) not in BENCH_SLOTS]
-    cur = ctx.logs[(ctx.logs["game_date"] >= ctx.week_start) & ctx.logs["nba_id"].isin(pids)]
-    value = ctx.values["value"]
+
+    For each game day: a game counts only if the player was on the team when it tipped off
+    (timestamped moves from the Yahoo log / History), and only if he started: the lineup
+    recorded that day if there is one (pasted, or "I set this in Yahoo"), otherwise the best
+    legal lineup by *projection* (not by actual points, which would be hindsight).
+    (Until Oct 2026 the current slots were applied to the whole week, so pressing the lineup
+    button on a light day benched everyone's earlier games.)"""
+    from . import lineup
+    team_key = team_key or team_key_of(ctx, pids)
+    moves = _team_moves(ctx, team_key)
+    current = set(pids)
+    cand = current | set(moves)
+    cur = ctx.logs[(ctx.logs["game_date"] >= ctx.week_start) & ctx.logs["nba_id"].isin(cand)]
+    if ctx.today:
+        cur = cur[cur["game_date"] < ctx.today]
+    days = _lineup_days(ctx, team_key)
+    tips = lineup.tip_times(ctx)
+    col = "value" if model.scoring_mode() == "points" else "var"
+    slots = lineup.slot_list()
     tot = {s: 0.0 for s in SIM_STATS}
-    for _, day in cur.groupby("game_date"):
-        day = day.assign(v=day["nba_id"].map(value).fillna(-99)).nlargest(ctx.active_slots, "v")
+    for d, day in cur.groupby("game_date"):
+        d = str(d)[:10]
+        on = []
+        for r in day.itertuples():
+            tip = tips.get((r.team, d)) or datetime.fromisoformat(d + "T19:00").astimezone()
+            if _was_on(moves.get(r.nba_id, []), tip, r.nba_id in current):
+                on.append(r.nba_id)
+        snap = days.get(d)
+        if snap:
+            starters = {p for p in on if snap.get(p) not in BENCH_SLOTS | {None, "?"}}
+        else:
+            cands = sorted(((p, lineup.positions(ctx, p)[0], float(ctx.values[col].get(p, 0.0))) for p in on),
+                           key=lambda c: -c[2])
+            starters = set(lineup.solve(cands, slots)[0].values())
+        played = day[day["nba_id"].isin(starters)]
         for s in SIM_STATS:
-            tot[s] += float(day[s].sum())
+            tot[s] += float(played[s].sum())
     return tot
+
+
+def _was_on(events, tip, currently) -> bool:
+    """events: [(datetime, 'add'|'drop')] sorted. On the roster at `tip`?"""
+    before = [k for ts, k in events if ts < tip]
+    if before:
+        return before[-1] == "add"
+    after = [k for ts, k in events if ts >= tip]
+    if after:
+        return after[0] == "drop"      # first thing after the game was a drop: he was there
+    return currently
+
+
+def _team_moves(ctx, team_key) -> dict:
+    key = ("_moves", team_key)
+    if key not in ctx._pools:
+        out = {}
+        with db.cursor() as c:
+            for r in c.execute("SELECT ts, nba_id, kind FROM league_moves WHERE team_key=? ORDER BY ts", (team_key,)):
+                out.setdefault(r["nba_id"], []).append((datetime.fromisoformat(r["ts"]), r["kind"]))
+        for ev in out.values():
+            ev.sort(key=lambda e: e[0])
+        ctx._pools[key] = out
+    return ctx._pools[key]
+
+
+def _lineup_days(ctx, team_key) -> dict:
+    key = ("_lineup_days", team_key)
+    if key not in ctx._pools:
+        out = {}
+        with db.cursor() as c:
+            for r in c.execute("SELECT day, nba_id, slot FROM lineup_days WHERE team_key=? AND day>=?",
+                               (team_key, ctx.week_start)):
+                out.setdefault(r["day"], {})[r["nba_id"]] = r["slot"]
+        ctx._pools[key] = out
+    return ctx._pools[key]
 
 
 BENCH_SLOTS = {"BN", "IL", "IL+", "NA"}
@@ -232,7 +292,7 @@ def team_key_of(ctx: Context, pids):
 
 
 def week_to_date(ctx: Context, team_key) -> dict:
-    return ctx.wtd.get(team_key) or estimate_wtd(ctx, ctx.rosters.get(team_key, []))
+    return ctx.wtd.get(team_key) or estimate_wtd(ctx, ctx.rosters.get(team_key, []), team_key)
 
 
 def _pool(ctx: Context, pid):

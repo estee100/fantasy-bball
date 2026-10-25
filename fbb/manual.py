@@ -112,6 +112,8 @@ def set_team(name: str, text: str, mine: bool = False, ctx=None) -> dict:
     updated = db.kv_get("manual_updated", {})
     updated[key] = db.now_iso()
     db.kv_set("manual_updated", updated)
+    if any(slot not in ("?", None) for _, slot in players):
+        db.snapshot_lineup(key)   # the pasted slots are that team's lineup today
     if mine:
         before = db.kv_get("my_roster_last")
         now = [pid for pid, _ in players]
@@ -209,6 +211,7 @@ def set_slot(key: str, pid: int, slot: str):
         n = c.execute("UPDATE rosters SET slot=? WHERE team_key=? AND nba_id=?", (slot, key, pid)).rowcount
     if not n:
         raise ValueError("That player isn't on this team")
+    db.snapshot_lineup(key)
     _touch(key)
 
 

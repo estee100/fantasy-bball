@@ -20,7 +20,7 @@ from datetime import date, datetime, timedelta
 
 from . import db, news
 
-_PLAYER = re.compile(r"^(.*?)\s+([A-Z]{2,4}) - ([A-Z,]+)(?:\s+(?:O|DTD|GTD|INJ|SUSP|NA|IL\+?))?\s*$")
+_PLAYER = re.compile(r"^(.*?)\s+([A-Z]{2,4}) - ([A-Z,]+)(?:\s+[A-Z]{1,4}\+?)?\s*$")  # trailing status badge (O, D, GTD...)
 _TEAM = re.compile(r"^(.*?)\s+([A-Z][a-z]{2}) (\d{1,2}), (\d{1,2}):(\d{2}) (am|pm)(?:\s+logo)?\s*$")
 _MONTHS = {m: i for i, m in enumerate(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
 ADD_FROM = {"free agent", "waiver", "waivers", "fa"}
@@ -86,17 +86,34 @@ def import_log(text: str, today=None) -> dict:
         raise ValueError("No transactions found. Paste Yahoo's League > Transactions page.")
     with db.cursor() as c:
         teams = {r["name"].strip().lower(): r["team_key"] for r in c.execute("SELECT name, team_key FROM fantasy_teams")}
+        display = {r["team_key"]: r["name"] for r in c.execute("SELECT name, team_key FROM fantasy_teams")}
         mine = c.execute("SELECT team_key FROM fantasy_teams WHERE is_mine=1").fetchone()
         mine = mine["team_key"] if mine else None
         names = {r["nba_id"]: r["name"] for r in c.execute("SELECT nba_id, name FROM players")}
         holder = {r["nba_id"]: r["team_key"] for r in c.execute("SELECT team_key, nba_id FROM rosters")}
     pasted = db.kv_get("manual_updated", {})
+    aliases = db.kv_get("team_aliases") or {}
+    named_here = {(t["team"] or "").strip().lower() for t in txns}
     seen = set(db.kv_get("yahoo_txn_seen") or [])
     out = {"applied": [], "already_reflected": [], "already_seen": 0, "your_moves_logged": [],
            "skipped": [], "unrecognized": odd}
     mine_moves = []
     for t in txns:
-        key = teams.get((t["team"] or "").strip().lower())
+        name = (t["team"] or "").strip().lower()
+        key = teams.get(name) or aliases.get(name)
+        if key is None and t["team"]:
+            # a name we don't know: probably a renamed team. Credit the one team holding the
+            # players involved, if exactly one does and its old name isn't also in this log.
+            held = {holder.get(d["pid"]) for d in t["drops"]} | {holder.get(a["pid"]) for a in t["adds"]}
+            held.discard(None)
+            old = {v: k for k, v in teams.items()}
+            if len(held) == 1 and old.get(next(iter(held))) not in named_here:
+                key = next(iter(held))
+                aliases[name] = key
+                teams[name] = key
+                with db.cursor() as c:
+                    c.execute("UPDATE fantasy_teams SET name=? WHERE team_key=?", (t["team"].strip(), key))
+                out.setdefault("renamed", []).append(f"{display.get(key)} is now {t['team'].strip()}")
         if key is None and t["team"] is None:
             key = next((holder.get(d["pid"]) for d in t["drops"] if holder.get(d["pid"])), None)
             if key is None:  # drop already applied: credit whoever now holds the added player
@@ -106,6 +123,11 @@ def import_log(text: str, today=None) -> dict:
             out["skipped"].append(f"{desc}: team unknown ({t['team'] or 'cut off'})")
             continue
         t["team_key"] = key
+        if t["when"] is not None:   # exact times, for week-to-date scoring (also for moves seen before)
+            for a in t["adds"]:
+                db.add_move(key, t["when"].isoformat(), a["pid"], "add", "yahoo-log")
+            for d in t["drops"]:
+                db.add_move(key, t["when"].isoformat(), d["pid"], "drop", "yahoo-log")
         sig = _sig(t)
         if sig in seen:
             out["already_seen"] += 1
@@ -128,6 +150,7 @@ def import_log(text: str, today=None) -> dict:
             out["already_reflected"].append(label)
         _update_fa_list(t)
     db.kv_set("yahoo_txn_seen", sorted(seen))
+    db.kv_set("team_aliases", aliases)
 
     # your moves -> History, unless those players are already recorded there
     if mine_moves:

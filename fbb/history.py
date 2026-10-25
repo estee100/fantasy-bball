@@ -128,9 +128,40 @@ def record(ctx, kind: str, ins: list, outs: list, effective: str | None = None, 
                         (db.now_iso(), effective, kind, me, other_key, json.dumps(ins), json.dumps(outs),
                          source, note, move_id, yahoo_key, json.dumps(pred, default=float)))
         tid = cur.lastrowid
+    if source != "yahoo-log":   # the Yahoo log stores exact times itself
+        _log_moves(me, kind, ins, outs, other_key, effective, db.now_iso(), source)
     if me:
         db.kv_set("my_roster_last", _roster(me))
     return tid
+
+
+def _log_moves(me, kind, ins, outs, other_key, effective, created, source):
+    """Timestamped adds/drops for week-to-date scoring. Entered today: the time it was
+    entered; backdated: start of that day (local)."""
+    from datetime import datetime
+    when = datetime.fromisoformat(created).astimezone()
+    ts = when.isoformat() if when.date().isoformat() == effective else \
+        datetime.fromisoformat(effective).astimezone().isoformat()
+    for p in ins:
+        db.add_move(me, ts, p, "add", source)
+    for p in outs:
+        db.add_move(me, ts, p, "drop", source)
+    if kind == "trade" and other_key:
+        for p in outs:
+            db.add_move(other_key, ts, p, "add", source)
+        for p in ins:
+            db.add_move(other_key, ts, p, "drop", source)
+
+
+def backfill_moves():
+    """One-off: timestamps for History entries made before league_moves existed."""
+    _ensure()
+    with db.cursor() as c:
+        rows = c.execute("SELECT * FROM transactions WHERE deleted=0 AND source<>'yahoo-log'").fetchall()
+    for r in rows:
+        _log_moves(r["team_key"], r["kind"], json.loads(r["players_in"]), json.loads(r["players_out"]),
+                   r["other_key"], r["effective"], r["created"], r["source"])
+    return len(rows)
 
 
 def _roster(key):
