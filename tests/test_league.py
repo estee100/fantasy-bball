@@ -425,3 +425,36 @@ def test_model_team_respects_add_limit_and_ownership(ctx):
     others = {p for k, ids in ctx.rosters.items() if k != ctx.my_key for p in ids}
     assert others <= sc.rostered()                               # can't add owned players
     assert shadow.daily(ctx, today="2026-10-27") == {"skipped": True}   # once a day
+
+
+# ---------------------------------------------------------------- injured: absence so far; delete reverses
+
+def test_absence_so_far_sets_a_floor_on_remaining_absence():
+    from fbb import model
+    inj = {1: {"nba_id": 1, "status": "Out", "comment": "Smith (knee) is out for Saturday's game.", "date": None}}
+    saved = model.ABSENCE_STREAK
+    try:
+        model.ABSENCE_STREAK = {1: 0}
+        one = model.availability(1, ["2026-11-01", "2026-11-03", "2026-11-05"], inj, {}, {}, set())
+        model.ABSENCE_STREAK = {1: 3}
+        three = model.availability(1, ["2026-11-01", "2026-11-03", "2026-11-05"], inj, {}, {}, set())
+    finally:
+        model.ABSENCE_STREAK = saved
+    assert one[0] == 0.0 and one[1] > 0.5          # the note alone: one game
+    assert three == [0.0, 0.0, 0.0]                # missed 3 already: expect 3 more
+
+
+def test_deleting_a_history_entry_reverts_the_roster(ctx, monkeypatch):
+    from fbb import history, db, recommend
+    me = ctx.rosters[ctx.my_key]
+    drop = me[-1]
+    add = next(p for p in recommend.best_free_agents(ctx, 10))
+    tid = history.record(ctx, "add/drop", [add], [drop], apply=True)
+    with db.cursor() as c:
+        assert c.execute("SELECT 1 FROM rosters WHERE team_key=? AND nba_id=?", (ctx.my_key, add)).fetchone()
+    res = history.delete(tid)
+    assert res["roster_reverted"]
+    with db.cursor() as c:
+        assert c.execute("SELECT 1 FROM rosters WHERE team_key=? AND nba_id=?", (ctx.my_key, add)).fetchone() is None
+        assert c.execute("SELECT 1 FROM rosters WHERE team_key=? AND nba_id=?", (ctx.my_key, drop)).fetchone()
+        assert c.execute("SELECT count(*) FROM league_moves WHERE nba_id IN (?,?) AND source='manual'", (add, drop)).fetchone()[0] == 0

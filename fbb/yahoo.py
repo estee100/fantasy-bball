@@ -4,7 +4,7 @@ Moves are recommended, never executed: you make them in the Yahoo app, and the n
 detects the roster change and logs it to the learning ledger.
 """
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 
 from . import config, db, learning
 from .nba import norm_name
@@ -322,9 +322,17 @@ def sync() -> dict:
 
 def probe() -> bool:
     """Is the Fantasy API answering yet? Records it and alerts once when it starts working."""
+    last = db.kv_get("yahoo_probe_at")
+    if last and (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() < 3600:
+        return False  # hourly is plenty
+    db.kv_set("yahoo_probe_at", db.now_iso())
     try:
         q = query()
         q.get_league_metadata()
+    except ValueError as e:
+        # Yahoo's token endpoint sometimes answers with a non-JSON page: not live, try later
+        log.warning("yahoo probe: unreadable response (%s)", e)
+        return False
     except Exception as e:
         if "not authorized" in str(e):
             return False

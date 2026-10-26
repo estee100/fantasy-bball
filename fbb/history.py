@@ -209,11 +209,42 @@ def update(tid: int, effective=None, note=None):
             c.execute("UPDATE transactions SET note=? WHERE id=?", (note, tid))
 
 
-def delete(tid: int):
-    """Remove from history (a mistaken entry). Doesn't touch rosters."""
+def delete(tid: int, revert=True) -> dict:
+    """Remove a mistaken entry. revert=True also undoes its roster change, its timestamped
+    moves and its 'executed' mark on a suggestion, as long as the roster still shows the
+    move (if you've changed those players since, the roster is left alone and that's said)."""
     _ensure()
     with db.cursor() as c:
+        t = c.execute("SELECT * FROM transactions WHERE id=?", (tid,)).fetchone()
+        if t is None:
+            raise ValueError("No such entry")
         c.execute("UPDATE transactions SET deleted=1 WHERE id=?", (tid,))
+    out = {"deleted": tid, "roster_reverted": False}
+    if not revert:
+        return out
+    ins, outs = json.loads(t["players_in"]), json.loads(t["players_out"])
+    me, other = t["team_key"], t["other_key"]
+    with db.cursor() as c:
+        held = {r["nba_id"]: r["team_key"] for r in c.execute("SELECT team_key, nba_id FROM rosters")}
+        still = all(held.get(p) == me for p in ins) and all(held.get(p) in (None, other) for p in outs)
+        if still:
+            for p in ins:
+                c.execute("DELETE FROM rosters WHERE team_key=? AND nba_id=?", (me, p))
+                if t["kind"] == "trade" and other:
+                    c.execute("INSERT OR REPLACE INTO rosters VALUES (?,?,?)", (other, p, "BN"))
+            for p in outs:
+                c.execute("DELETE FROM rosters WHERE nba_id=?", (p,))
+                c.execute("INSERT OR REPLACE INTO rosters VALUES (?,?,?)", (me, p, "BN"))
+            out["roster_reverted"] = True
+        else:
+            out["note"] = "Roster not changed: those players have moved since. Fix it in the roster editor."
+        c.execute("DELETE FROM league_moves WHERE source=? AND team_key IN (?, ?) AND nba_id IN (%s)"
+                  % ",".join("?" * len(ins + outs)), [t["source"], me, other or me] + ins + outs) if ins + outs else None
+        if t["move_id"]:
+            c.execute("UPDATE moves SET status='suggested', executed_at=NULL WHERE id=? AND status='executed'", (t["move_id"],))
+    if me:
+        db.kv_set("my_roster_last", _roster(me))
+    return out
 
 
 def evaluate(ctx) -> int:

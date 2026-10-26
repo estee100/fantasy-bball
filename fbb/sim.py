@@ -92,6 +92,7 @@ def load_context() -> Context:
                   roster_size=roster_size, num_teams=num_teams,
                   weeks_remaining=db.kv_get("weeks_remaining", default_weeks_remaining()),
                   wtd=db.kv_get("week_to_date") or {}, raw_proj=raw_proj, takes=takes)
+    model.ABSENCE_STREAK = model.absence_streaks(logs, players, ctx.injuries)
     if params.get("opp_adjust"):
         from . import matchups
         ctx.defense = matchups.defense_table(logs, date.today().isoformat(), params.get("opp_k", 80))

@@ -126,6 +126,7 @@ def run(season=None, weeks_skip=2, max_weeks=None, num_teams=12, roster_size=13,
     # all-absences rate for healthy players (the live model only needs the short-run rate).
     rates = model.miss_rates(logs_all, season)
     saved_rates = (model.HEALTHY_GAME, model.HEALTHY_ROS)
+    saved_streak, model.ABSENCE_STREAK = model.ABSENCE_STREAK, {}
     model.HEALTHY_GAME, model.HEALTHY_ROS = 1 - rates["all"], 1 - rates["all"]
     saved_scales = db.kv_get("value_scales")  # value_players() writes these; restore after
     rows = []
@@ -151,6 +152,7 @@ def run(season=None, weeks_skip=2, max_weeks=None, num_teams=12, roster_size=13,
     finally:
         db.kv_set("value_scales", saved_scales)
         model.HEALTHY_GAME, model.HEALTHY_ROS = saved_rates
+        model.ABSENCE_STREAK = saved_streak
     out = summarize(rows)
     out["rows"] = rows
     out["miss_rates"] = rates

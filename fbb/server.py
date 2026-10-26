@@ -565,8 +565,13 @@ def history_edit(tid: int, e: TxEdit):
 @app.delete("/api/history/{tid}")
 def history_delete(tid: int):
     from . import history
-    history.delete(tid)
-    return {"ok": True}
+    try:
+        res = history.delete(tid)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    if res.get("roster_reverted"):
+        _manual_changed()
+    return _json(dict(res, ok=True))
 
 
 

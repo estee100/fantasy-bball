@@ -278,6 +278,12 @@ def _games_out(pid, injuries, events):
 
 # Share of games a player with no injury listing still misses (new injuries, rest, illness).
 # Learned from box scores by miss_rates(); set from params when a context loads.
+# Consecutive team games already missed by players listed Out (set when a context loads).
+# Floor on the remaining absence: a note that only says "out for Saturday's game" about a
+# player who hasn't played all season (Oct 2026: Aldama, Harris) shouldn't read as one game.
+ABSENCE_STREAK: dict = {}
+STREAK_MIN = 2
+
 HEALTHY_GAME = 0.94     # per-game chance a non-listed player suits up this week
 HEALTHY_ROS = 0.90      # share of the rest of the season a non-listed player plays
 
@@ -324,6 +330,9 @@ def availability(pid, game_dates, injuries, events, b2b, team_dates_set):
         games_out = max(0.0, games_out - elapsed)
         if games_out == 0:
             base = max(base, 0.8)  # timeline served; still listed, so not fully trusted yet
+    streak = _streak(pid, injuries)
+    if streak:
+        games_out = max(games_out or 0.0, streak)
     out = []
     for i, d in enumerate(game_dates):
         p = base
@@ -340,6 +349,9 @@ def ros_availability(pid, injuries, events) -> float:
     """Expected share of the rest of the season's games the player suits up for."""
     inj = injuries.get(pid)
     games_out = _games_out(pid, injuries, events)
+    streak = _streak(pid, injuries)
+    if streak:
+        games_out = max(games_out or 0.0, streak)
     left = max(season_games_left(), 1.0)
     if games_out is not None:
         return max(0.0, 1 - games_out / left) * HEALTHY_ROS
@@ -520,3 +532,33 @@ def avg_opponent_dist(team_dists: list) -> dict:
 
 def dump(obj) -> str:
     return json.dumps(obj, default=lambda o: o.item() if hasattr(o, "item") else str(o))
+
+
+
+def _streak(pid, injuries):
+    """Games already missed in a row, if he's listed Out (else None)."""
+    inj = injuries.get(pid)
+    if not inj or (inj.get("status") or "").lower() != "out":
+        return None
+    n = ABSENCE_STREAK.get(pid, 0)
+    return float(n) if n >= STREAK_MIN else None
+
+
+def absence_streaks(logs: pd.DataFrame, players: pd.DataFrame, injuries: dict) -> dict:
+    """{pid: team games this season since his last game} for players listed Out."""
+    if logs.empty:
+        return {}
+    season = logs["season"].max()
+    cur = logs[logs["season"] == season]
+    team_dates = cur.groupby("team")["game_date"].apply(lambda s: sorted(set(s.astype(str).str[:10])))
+    last = logs.groupby("nba_id")["game_date"].max().astype(str).str[:10]
+    out = {}
+    for pid, inj in injuries.items():
+        if (inj.get("status") or "").lower() != "out" or pid not in players.index:
+            continue
+        team = players.at[pid, "team"]
+        if not isinstance(team, str) or team not in team_dates.index:
+            continue
+        lp = last.get(pid, "")
+        out[pid] = sum(1 for d in team_dates[team] if d > lp)
+    return out

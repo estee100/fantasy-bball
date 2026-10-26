@@ -1208,8 +1208,11 @@ async function loadHistory() {
     await api(`/api/history/${i.dataset.txdate}`, { method: "POST", body: JSON.stringify({ effective: i.value }) }); loadHistory();
   }));
   $$("#tx-list [data-txdel]").forEach((b) => b.addEventListener("click", async () => {
-    if (!confirm("Remove this entry from history? (Rosters aren't changed.)")) return;
-    await fetch(`/api/history/${b.dataset.txdel}`, { method: "DELETE" }); loadHistory();
+    if (!confirm("Remove this entry and undo its roster change?")) return;
+    const r = await (await fetch(`/api/history/${b.dataset.txdel}`, { method: "DELETE" })).json();
+    if (r.note) alert(r.note);
+    loadHistory();
+    if (r.roster_reverted) afterManualChange();
   }));
   bindPlayerLinks(el);
 }

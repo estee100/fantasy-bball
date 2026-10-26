@@ -44,6 +44,8 @@ def refresh(daily=False) -> dict:
         return {"skipped": "refresh already running"}
     try:
         status = db.kv_get("pipeline_status", {})
+        if not (config.yahoo_authorized() and db.kv_get("yahoo_sync_verified")):
+            status.pop("yahoo", None)  # sync isn't running: its old error is stale
         if daily or db.kv_get("daily_done") != date.today().isoformat():
             _step(status, "player_directory", nba.ingest_player_directory)
             _step(status, "schedule", nba.ingest_schedule)
