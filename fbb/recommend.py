@@ -133,6 +133,18 @@ def injury_plan(ctx, pid):
     return "il" if g is not None and g >= IL_MIN_GAMES else "bench"
 
 
+RECENT_DROP_DAYS = 7
+
+
+def _recent_drops(ctx) -> set:
+    from datetime import date, timedelta
+    since = ((date.fromisoformat(ctx.today) if ctx.today else date.today())
+             - timedelta(days=RECENT_DROP_DAYS)).isoformat()
+    with db.cursor() as c:
+        return {r["nba_id"] for r in c.execute(
+            "SELECT nba_id FROM league_moves WHERE team_key=? AND kind='drop' AND ts>=?", (ctx.my_key, since))}
+
+
 def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11, log=True, budget=None) -> dict:
     """log=False / budget: used by the model's own team (fbb/shadow.py), which must not write
     to your suggestion ledger or count your adds."""
@@ -151,7 +163,10 @@ def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11, log=True, budget=No
     from . import free_agents
     listed = [p for p in free_agents.listed_ids() if p in ctx.proj.index and p not in rostered
               and isinstance(ctx.team_of(p), str) and in_rotation(ctx, p)]
-    adds = list(dict.fromkeys(by_ros + by_week + listed))
+    # Not players you cut in the last week: flipping back on a small projected edge just burns
+    # adds (Oct 2026: Fears suggested back the day he was dropped, at +0.03 wins).
+    recent = _recent_drops(ctx)
+    adds = [p for p in dict.fromkeys(by_ros + by_week + listed) if p not in recent]
     # Players in IL slots don't count toward the roster limit: dropping one opens nothing,
     # and having one there may leave an open spot (an add with no drop at all).
     from . import lineup
