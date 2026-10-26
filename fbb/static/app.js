@@ -11,7 +11,11 @@ let charts = {};
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
-  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  if (!r.ok) {
+    // show the server's reason, not just the status code
+    const detail = await r.json().then((j) => j.detail).catch(() => null);
+    throw new Error(typeof detail === "string" ? detail : `${path}: ${r.status}`);
+  }
   return r.json();
 }
 
@@ -304,6 +308,7 @@ function renderMoves() {
     const res = await api(`/api/moves/${found.id}`, { method: "POST", body: JSON.stringify({ status: b.dataset.act }) }).catch((e) => ({ error: e.message }));
     b.closest(".actions").innerHTML = `<span class="small muted">${res.error ? "Couldn't apply: " + esc(res.error)
       : res.claimed ? `Claim noted. Your roster isn't changed yet: once it clears${res.until ? " (" + esc(shortDate(res.until)) + ")" : ""}, paste the transaction log and it's applied and logged.`
+      : res.already ? "Already logged as made: this card is from before the model re-ran."
       : b.dataset.act === "executed" ? (res.roster_updated ? "Roster updated and logged; it'll be scored against real box scores. Re-running the model…" : "Logged as made: it'll be scored against real box scores.")
       : "Dismissed: still scored as a counterfactual, so the model learns either way."}</span>`;
     if (res.roster_updated) afterManualChange();

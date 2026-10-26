@@ -252,6 +252,12 @@ def move_status(move_id: int, s: StatusIn):
         raise HTTPException(400, "bad status")
     applied = False
     if s.status == "executed":
+        with db.cursor() as c:
+            cur = c.execute("SELECT status FROM moves WHERE id=?", (move_id,)).fetchone()
+        if cur and cur["status"] == "executed":
+            # a second click (the card stays up until the model re-runs) used to re-apply the
+            # move to a roster that already had it and fail with a bare 400
+            return {"ok": True, "roster_updated": False, "already": True}
         # A waiver player can't be added yet: it's a claim. Changing the roster now made the app
         # show a move that hadn't happened (Oct 2026: Bane in / White out before the claim ran).
         from . import free_agents
