@@ -22,7 +22,7 @@ from datetime import date, datetime, timedelta
 from . import db, lineup, model, recommend, sim
 
 MAX_ADDS_WEEK = 4
-IL_SLOTS = 2        # Oct 2026 pastes show a team with 2 players on IL
+IL_SLOTS = recommend.IL_SLOTS
 MOVE_LABELS = {"Do today", "Worth doing", "Waiver claim"}
 MIN_OPEN_SPOT_GAIN = 0.02
 
@@ -82,6 +82,7 @@ def _shadow_ctx(ctx, s):
     owned = ({p for k, ids in ctx.rosters.items() if k != ctx.my_key for p in ids}
              | real_mine | set(s["roster"]) | set(s["il"]) | {c["add"] for c in s["pending"]})
     sc.rostered = lambda: owned
+    sc.il_used = len(s["il"])  # its IL players are off sc.rosters: tell the recommender they're there
     sc.wtd = dict(ctx.wtd)
     sc.wtd[ctx.my_key] = _week_totals(ctx, s, ctx.week_start)
     return sc
@@ -158,7 +159,7 @@ def daily(ctx, today=None) -> dict:
                 _log(today, "activate", p, None, reason="healthy again")
                 done.append(f"activated {ctx.name(p)}")
     for p in sorted(s["roster"], key=lambda q: -recommend.ros_value(ctx, q)):
-        if len(s["il"]) < IL_SLOTS and _out(ctx, p):
+        if len(s["il"]) < IL_SLOTS and recommend.injury_plan(ctx, p) == "il":  # not for a game or two
             s["roster"].remove(p)
             s["il"].append(p)
             _log(today, "to IL", None, None, reason=f"{ctx.name(p)} out")

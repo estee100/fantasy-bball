@@ -276,14 +276,14 @@ def _games_out(pid, injuries, events):
     return None
 
 
-# Share of games a player with no injury listing still misses (new injuries, rest, illness).
-# Learned from box scores by miss_rates(); set from params when a context loads.
 # Consecutive team games already missed by players listed Out (set when a context loads).
 # Floor on the remaining absence: a note that only says "out for Saturday's game" about a
 # player who hasn't played all season (Oct 2026: Aldama, Harris) shouldn't read as one game.
 ABSENCE_STREAK: dict = {}
 STREAK_MIN = 2
 
+# Share of games a player with no injury listing still misses (new injuries, rest, illness).
+# Learned from box scores by miss_rates(); set from params when a context loads.
 HEALTHY_GAME = 0.94     # per-game chance a non-listed player suits up this week
 HEALTHY_ROS = 0.90      # share of the rest of the season a non-listed player plays
 
@@ -562,3 +562,10 @@ def absence_streaks(logs: pd.DataFrame, players: pd.DataFrame, injuries: dict) -
         lp = last.get(pid, "")
         out[pid] = sum(1 for d in team_dates[team] if d > lp)
     return out
+
+
+def expected_games_out(pid, injuries, events):
+    """Best estimate of games still to miss (timeline, floored by the absence so far), or None."""
+    g = _games_out(pid, injuries, events)
+    st = _streak(pid, injuries)
+    return max(g or 0.0, st or 0.0) if (g is not None or st) else None

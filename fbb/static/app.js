@@ -276,7 +276,8 @@ function renderMoves() {
   const B = S.recommendations?.add_budget;
   const budget = B && B.limit ? `<div class="small ${B.left === 0 ? "delta-down" : "muted"}" style="margin:6px 0">Adds this week: <b>${B.used} of ${B.limit}</b> used${B.left === 0 ? ": none left, so nothing below can be done until next week" : B.left === 1 ? ": one left, save it for the best move" : ""}.</div>` : "";
   const OS = S.recommendations?.open_spot;
-  const open = OS && OS.adds?.length ? `<div class="card" style="margin:6px 0 10px;padding:10px 12px"><b>You have ${OS.spots} open roster spot${OS.spots > 1 ? "s" : ""}</b> <span class="small muted">(a player on IL doesn't count toward your limit)</span>: add without dropping anyone.
+  const toIL = OS?.move_to_il?.length ? `Move ${OS.move_to_il.map((p) => `<a href="#" data-pid="${p.nba_id}">${esc(p.name)}</a>`).join(" and ")} (listed Out) to IL first, then you'll have` : "You have";
+  const open = OS && OS.adds?.length ? `<div class="card" style="margin:6px 0 10px;padding:10px 12px"><b>${toIL} ${OS.spots} open roster spot${OS.spots > 1 ? "s" : ""}</b> <span class="small muted">(a player on IL doesn't count toward your limit)</span>: add without dropping anyone.
     <ul class="small" style="margin:6px 0 0">${OS.adds.map((a) => `<li><a href="#" data-pid="${a.add}">${esc(a.add_name)}</a> (${esc(a.add_team || "")}) ${(a.score >= 0 ? "+" : "") + fmt(a.score, 2)} expected wins${a.availability?.status === "W" ? ` · on waivers until ${esc(shortDate(a.availability.until))}` : ""}</li>`).join("")}</ul></div>` : "";
   el.innerHTML = summary + budget + open + moves.map((m, i) => `
     <div class="move">

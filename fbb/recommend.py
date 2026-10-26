@@ -93,9 +93,17 @@ def describe(ctx, B, m, with_urgency=True) -> dict:
     m["add_team"], m["drop_team"] = ctx.team_of(m["add"]), ctx.team_of(m["drop"])
     m["add_games"] = len(sim.player_games(ctx, m["add"], dates))
     m["drop_games"] = len(sim.player_games(ctx, m["drop"], dates))
-    if ((ctx.injuries.get(m["drop"]) or {}).get("status") or "").lower() == "out":
-        m["rationale"].insert(0, f"{m['drop_name']} is listed Out: if you have a free IL slot, move him there "
+    plan = injury_plan(ctx, m["drop"])
+    g = model.expected_games_out(m["drop"], ctx.injuries, ctx.events)
+    if plan == "il":
+        m["rationale"].insert(0, f"{m['drop_name']} is out ~{g:.0f} games: if you have a free IL slot, move him there "
                                  f"and add {m['add_name']} without dropping anyone")
+    elif plan == "bench":
+        m["rationale"].insert(0, f"{m['drop_name']} is listed Out but only short-term"
+                                 + (f" (~{g:.0f} game{'s' if g >= 1.5 else ''})" if g else "")
+                                 + ": benching him for that is usually better than cutting him")
+    elif plan == "drop_ok":
+        m["rationale"].insert(0, f"{m['drop_name']} looks out for the season: cutting him keeps your IL slot free")
     from . import free_agents
     av = free_agents.availability(m["add"])
     m["availability"] = av
@@ -106,6 +114,23 @@ def describe(ctx, B, m, with_urgency=True) -> dict:
     if with_urgency:
         m.update(urgency(ctx, m, B["mine"], B["opp"], dates, B["b"], B["wtd_me"], B["n_sims"], B["seed"]))
     return m
+
+
+IL_SLOTS = 2   # Oct 2026 pastes show a team with 2 players on IL
+# IL is for absences long enough to be worth an add now and a drop when he's back (~a week).
+# A game or two: bench him. Out for the season: cutting him keeps the IL slot for later.
+IL_MIN_GAMES = 3
+SEASON_OUT_SHARE = 0.8
+
+
+def injury_plan(ctx, pid):
+    """'il', 'bench' (short absence), 'drop_ok' (out for the season) or None (not listed Out)."""
+    if ((ctx.injuries.get(pid) or {}).get("status") or "").lower() != "out":
+        return None
+    g = model.expected_games_out(pid, ctx.injuries, ctx.events)
+    if g is not None and g >= SEASON_OUT_SHARE * max(model.season_games_left(), 1.0):
+        return "drop_ok"
+    return "il" if g is not None and g >= IL_MIN_GAMES else "bench"
 
 
 def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11, log=True, budget=None) -> dict:
@@ -132,13 +157,19 @@ def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11, log=True, budget=No
     from . import lineup
     slots = sim.team_slots(ctx).get(ctx.my_key, {})
     il = {p for p in mine if slots.get(p) in lineup.NOT_STARTABLE}
+    # A benched player listed Out with an IL slot free should go to IL, not be cut: that's a
+    # free roster spot. Without this, Duren (out ~2 weeks, Oct 2026) kept showing as the drop.
+    to_il = [p for p in sorted(mine, key=lambda p: -ros_value(ctx, p))
+             if p not in il and injury_plan(ctx, p) == "il"][:max(0, IL_SLOTS - max(len(il), getattr(ctx, "il_used", 0)))]
+    il |= set(to_il)
     drops = sorted((p for p in mine if p not in il), key=lambda p: ros_value(ctx, p))[:SCREEN_DROPS]
     open_spots = max(0, ctx.roster_size - (len(mine) - len(il)))
     open_spot = None
     if open_spots:
         best = sorted((score_swap(ctx, B, a, None) for a in adds), key=lambda m: -m["score"])[:3]
         from . import free_agents
-        open_spot = {"spots": open_spots, "adds": [
+        open_spot = {"spots": open_spots,
+                     "move_to_il": [{"nba_id": int(p), "name": ctx.name(p)} for p in to_il], "adds": [
             {"add": int(m["add"]), "add_name": ctx.name(m["add"]), "add_team": ctx.team_of(m["add"]),
              "score": m["score"], "availability": free_agents.availability(m["add"])} for m in best]}
 
