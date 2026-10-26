@@ -9,8 +9,7 @@ he came from or went, then the team and time on the line after them:
     To Waivers                    <- dropped
     Sheldon's Superb Team Oct 22, 4:04 am logo
 
-A block whose team line was cut off by the copy is credited to the team holding the dropped
-player. Each transaction is applied once (remembered by signature), and only if it is newer
+A block whose team line was cut off by the copy is skipped (reported). Each transaction is applied once (remembered by signature), and only if it is newer
 than that team's roster paste, so re-pasting the same log is harmless. Your own moves go to
 History unless the same players are already recorded there.
 """
@@ -114,13 +113,13 @@ def import_log(text: str, today=None) -> dict:
                 with db.cursor() as c:
                     c.execute("UPDATE fantasy_teams SET name=? WHERE team_key=?", (t["team"].strip(), key))
                 out.setdefault("renamed", []).append(f"{display.get(key)} is now {t['team'].strip()}")
-        if key is None and t["team"] is None:
-            key = next((holder.get(d["pid"]) for d in t["drops"] if holder.get(d["pid"])), None)
-            if key is None:  # drop already applied: credit whoever now holds the added player
-                key = next((holder.get(a["pid"]) for a in t["adds"] if holder.get(a["pid"])), None)
+        # A block whose team line was cut off by the copy has no team and no time. Guessing
+        # the team from who holds the players goes wrong once they've moved on (Oct 2026: an
+        # old cut-off Drummond/Davion block got pinned on Lejohn James), so it's skipped.
         desc = ", ".join([f"+{names.get(a['pid'])}" for a in t["adds"]] + [f"-{names.get(d['pid'])}" for d in t["drops"]])
         if key is None:
-            out["skipped"].append(f"{desc}: team unknown ({t['team'] or 'cut off'})")
+            out["skipped"].append(f"{desc}: " + (f"unknown team '{t['team']}'" if t["team"]
+                                  else "team name cut off at the end of the copy (copy a little further next time)"))
             continue
         t["team_key"] = key
         if t["when"] is not None:   # exact times, for week-to-date scoring (also for moves seen before)

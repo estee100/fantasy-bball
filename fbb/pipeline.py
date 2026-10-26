@@ -89,6 +89,8 @@ def refresh(daily=False) -> dict:
         if r:
             db.kv_set("recommendations", r)
         _step(status, "start_sit", lambda: db.kv_set("start_sit", recommend.start_sit_today(ctx)) or "ok")
+        from . import shadow
+        _step(status, "model_team", shadow.tick, ctx)
         _step(status, "evaluate_moves", learning.evaluate_moves, ctx.logs)
         _step(status, "resolve_matchups", learning.resolve_from_box_scores, ctx)
         from . import alerts, history

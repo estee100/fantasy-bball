@@ -345,22 +345,20 @@ def test_transaction_log_parses_blocks_and_cut_off_team(ctx, pid):
 
 
 def test_transaction_log_applies_once_and_only_newer_moves(league_db):
+    """Self-contained (the live league keeps changing): moves older than every team's roster
+    paste are never applied, and a second import of the same log applies nothing."""
     from datetime import date
     from pathlib import Path
     from fbb import yahoo_log, db
-    db.kv_set("yahoo_txn_seen", [])
     text = (Path(__file__).parent / "fixtures" / "yahoo_txn_paste.txt").read_text(encoding="utf-8")
-    db.kv_set("manual_updated", dict(db.kv_get("manual_updated", {}), **{"manual.the-haliban": "2026-10-22T08:26:52+00:00",
-              "manual.ryan-s-remarkable-team": "2026-10-22T08:27:27+00:00", "manual.only-pgs": "2026-10-22T08:28:20+00:00"}))
+    keys = [k for (k,) in db.cursor().__enter__().execute("SELECT team_key FROM fantasy_teams").fetchall()]
+    db.kv_set("yahoo_txn_seen", [])
+    db.kv_set("manual_updated", {k: "2026-10-24T00:00:00+00:00" for k in keys})   # all pastes newer
     r = yahoo_log.import_log(text, today=date(2026, 10, 22))
-    if not r["applied"] and not r["already_reflected"]:
-        import pytest
-        pytest.skip("league in the test DB doesn't have these teams")
-    assert all(x.startswith("The Haliban") for x in r["applied"])          # 8:12 / 9:05 am ET, after the paste
-    assert any("Only PGs" in x for x in r["already_reflected"])            # 4:04 am ET, before the paste
+    assert r["applied"] == []
     again = yahoo_log.import_log(text, today=date(2026, 10, 22))
     assert again["applied"] == [] and again["your_moves_logged"] == []
-    assert again["already_seen"] >= len(r["applied"]) + len(r["your_moves_logged"])
+    assert again["already_seen"] >= len(r["already_reflected"])
 
 
 # ---------------------------------------------------------------- week-to-date scoring
@@ -395,3 +393,35 @@ def test_week_to_date_uses_that_days_lineup_not_todays(ctx):
     ctx._pools.clear()
     day_pts = played[played["game_date"].astype(str).str[:10] == d]["pts"].sum()
     assert sim.estimate_wtd(ctx, ctx.rosters[me], me)["pts"] <= wtd["pts"] - day_pts + 1e-6
+
+
+# ---------------------------------------------------------------- unfinished games / model team
+
+def test_games_in_progress_are_not_stored(league_db, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from fbb import nba, db
+    with db.cursor() as c:
+        gid = c.execute("SELECT game_id FROM game_logs ORDER BY game_date DESC LIMIT 1").fetchone()[0]
+        c.execute("UPDATE schedule SET tip_utc=? WHERE game_id=?",
+                  ((datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(), gid))
+    assert str(gid) in nba._unfinished_games()
+    monkeypatch.setattr(nba, "_logs_frame", lambda season: __import__("pandas").DataFrame())
+    nba.ingest_logs()   # nothing new to store, but nothing breaks
+
+
+def test_model_team_respects_add_limit_and_ownership(ctx):
+    from fbb import shadow, db
+    me = ctx.rosters[ctx.my_key]
+    shadow.start(list(me), [], "2026-10-26")
+    shadow._ensure()
+    with db.cursor() as c:   # 4 adds already used this week
+        for i in range(4):
+            c.execute("INSERT INTO shadow_moves(created, day, kind, add_id, status) VALUES (?,?,?,?,?)",
+                      ("x", "2026-10-26", "add", 1000 + i, "done"))
+    shadow.daily(ctx, today="2026-10-27")
+    s = shadow.state()
+    assert sorted(s["roster"] + s["il"]) == sorted(me)          # no add beyond the limit
+    sc = shadow._shadow_ctx(ctx, s)
+    others = {p for k, ids in ctx.rosters.items() if k != ctx.my_key for p in ids}
+    assert others <= sc.rostered()                               # can't add owned players
+    assert shadow.daily(ctx, today="2026-10-27") == {"skipped": True}   # once a day

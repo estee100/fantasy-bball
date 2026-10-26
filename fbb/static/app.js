@@ -1188,6 +1188,7 @@ function initHistoryForm() {
 
 async function loadHistory() {
   loadTakes();
+  loadModelTeam();
   const H = await api("/api/history");
   const unit = H.unit === "fantasy pts" ? "pts" : "value";
   const sc = H.scorecard;
@@ -1453,4 +1454,29 @@ async function importTxns() {
     + `</div>`;
   $("#txn-text").value = "";
   loadHistory(); afterManualChange();
+}
+
+/* ------------------------------------------------------------------ the model's own team */
+async function loadModelTeam() {
+  const M = await api("/api/model-team");
+  const el = $("#mt-body");
+  if (!M.started) { el.innerHTML = '<span class="muted small">Not started.</span>'; return; }
+  const r = M.record;
+  $("#mt-sub").textContent = `started ${shortDate(M.started)} from your roster · manages itself: adds/drops, IL, lineups (no trades) · max 4 adds/week`;
+  const weeks = M.weeks.map((w) => `<tr><td>${esc(shortDate(w.week_start))}${w.final ? "" : ' <span class="muted small">(in progress)</span>'}</td>
+    <td>${esc(w.opp_name || "?")}</td><td class="r num">${fmt(w.model, 0)}</td><td class="r num">${fmt(w.you, 0)}</td><td class="r num">${w.opp == null ? "?" : fmt(w.opp, 0)}</td>
+    <td class="r num ${w.model >= w.you ? "delta-up" : "delta-down"}">${(w.model - w.you >= 0 ? "+" : "") + fmt(w.model - w.you, 0)}</td></tr>`).join("");
+  const moves = M.moves.slice(0, 12).map((m) => `<tr><td>${esc(shortDate(m.day))}</td><td>${esc(m.kind)}${m.status === "pending" ? ` <span class="muted small">(clears ${esc(shortDate(m.until))})</span>` : m.status === "failed" ? ' <span class="delta-down small">(failed)</span>' : ""}</td>
+    <td>${m.add_name ? "+" + esc(m.add_name) : ""}${m.drop_name ? " / −" + esc(m.drop_name) : ""}${m.reason && !m.add_name ? esc(m.reason) : ""}</td>
+    <td class="small">${m.add_pts_since != null ? `${fmt(m.add_pts_since, 0)} pts since` + (m.drop_pts_since != null ? ` vs ${fmt(m.drop_pts_since, 0)} for ${esc(m.drop_name)}` : "") : ""}</td>
+    <td class="small">${m.add_name ? (m.you_too ? "you did too" : '<span class="delta-down">you didn\'t</span>') : ""}</td></tr>`).join("");
+  el.innerHTML = `
+    <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:10px">
+      <div><div class="small muted">Model team record</div><div class="num" style="font-size:1.4em">${r.model[0]}–${r.model[1]}</div></div>
+      <div><div class="small muted">Your record (same opponents)</div><div class="num" style="font-size:1.4em">${r.you[0]}–${r.you[1]}</div></div>
+      <div style="flex:1;min-width:220px"><div class="small muted">Its roster now</div><div class="small">${esc(M.roster.join(", "))}${M.il.length ? ` · IL: ${esc(M.il.join(", "))}` : ""}${M.pending.length ? ` · claims: ${esc(M.pending.map((c) => c.add).join(", "))}` : ""}</div></div>
+    </div>
+    ${weeks ? `<div class="tbl-wrap"><table><thead><tr><th>Week of</th><th>Opponent</th><th class="r">Model</th><th class="r">You</th><th class="r">Opponent</th><th class="r">Model − you</th></tr></thead><tbody>${weeks}</tbody></table></div>` : '<div class="small muted">No finished days yet: the first scores appear the morning after its first games.</div>'}
+    ${moves ? `<h3 style="margin:14px 0 6px;font-size:1em">Its moves</h3><div class="tbl-wrap"><table><thead><tr><th>Day</th><th>Move</th><th>Players</th><th>Since then</th><th></th></tr></thead><tbody>${moves}</tbody></table></div>` : ""}
+    <div class="small muted" style="margin-top:8px">A scoreboard, not something the model learns from. Its paper claims always succeed and it never trades; your score uses your recorded lineups (or the best lineup by projection on days you didn't record one). One season of one team is noisy: read the record as a rough signal.</div>`;
 }

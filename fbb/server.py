@@ -736,3 +736,12 @@ def yahoo_log_import(t: TxnIn):
         raise HTTPException(400, str(e))
     _manual_changed()
     return _json(res)
+
+
+
+# ---------------------------------------------------------------- the model's own team
+
+@app.get("/api/model-team")
+def model_team():
+    from . import shadow
+    return _json(shadow.report(pipeline.context()))

@@ -44,6 +44,14 @@ def ingest_logs(seasons=None) -> int:
         df = _logs_frame(season)
         if df.empty:
             continue
+        unfinished = _unfinished_games()
+        if unfinished:
+            # The NBA's game log includes games still in progress (Oct 2026: a halftime box
+            # score cut Bane's projection from 30 to 21.6). Store a game only once it's over;
+            # drop any partial rows an earlier refresh stored.
+            df = df[~df["game_id"].astype(str).isin(unfinished)]
+            with db.cursor() as c:
+                c.execute(f"DELETE FROM game_logs WHERE game_id IN ({','.join('?' * len(unfinished))})", list(unfinished))
         rows = df[cols].itertuples(index=False, name=None)
         with db.cursor() as c:
             c.executemany(f"INSERT OR REPLACE INTO game_logs({','.join(cols)}) "
@@ -140,3 +148,21 @@ def ingest_espn_positions() -> int:
                     c.execute("UPDATE players SET espn_pos=? WHERE nba_id=?", (pos, pid))
                     n += 1
     return n
+
+
+
+GAME_LENGTH_HOURS = 3.5  # tip-off to final buzzer, with margin for overtime
+
+
+def _unfinished_games() -> set:
+    """Games that have tipped off (or may have) but can't be over yet."""
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    lo = (now - timedelta(days=2)).date().isoformat()
+    out = set()
+    with db.cursor() as c:
+        for r in c.execute("SELECT game_id, tip_utc FROM schedule WHERE game_date >= ? AND tip_utc IS NOT NULL", (lo,)):
+            tip = datetime.fromisoformat(r["tip_utc"].replace("Z", "+00:00"))
+            if tip <= now < tip + timedelta(hours=GAME_LENGTH_HOURS):
+                out.add(str(r["game_id"]))
+    return out
