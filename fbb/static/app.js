@@ -271,7 +271,10 @@ function renderMoves() {
       : `<div class="note"><b>Nothing worth doing today.</b> Every option below is a small or uncertain gain; holding is fine.</div>`;
   const B = S.recommendations?.add_budget;
   const budget = B && B.limit ? `<div class="small ${B.left === 0 ? "delta-down" : "muted"}" style="margin:6px 0">Adds this week: <b>${B.used} of ${B.limit}</b> used${B.left === 0 ? ": none left, so nothing below can be done until next week" : B.left === 1 ? ": one left, save it for the best move" : ""}.</div>` : "";
-  el.innerHTML = summary + budget + moves.map((m, i) => `
+  const OS = S.recommendations?.open_spot;
+  const open = OS && OS.adds?.length ? `<div class="card" style="margin:6px 0 10px;padding:10px 12px"><b>You have ${OS.spots} open roster spot${OS.spots > 1 ? "s" : ""}</b> <span class="small muted">(a player on IL doesn't count toward your limit)</span>: add without dropping anyone.
+    <ul class="small" style="margin:6px 0 0">${OS.adds.map((a) => `<li><a href="#" data-pid="${a.add}">${esc(a.add_name)}</a> (${esc(a.add_team || "")}) ${(a.score >= 0 ? "+" : "") + fmt(a.score, 2)} expected wins${a.availability?.status === "W" ? ` · on waivers until ${esc(shortDate(a.availability.until))}` : ""}</li>`).join("")}</ul></div>` : "";
+  el.innerHTML = summary + budget + open + moves.map((m, i) => `
     <div class="move">
       <div class="swap">
         ${m.urgency ? `<span class="status ${m.urgency === "Do today" ? "st-serious" : m.urgency === "Worth doing" ? "st-good" : ""}" data-tip="${esc(m.urgency_reason || "")}"><span class="dot" ${m.urgency === "Marginal" ? 'style="background:var(--axis)"' : ""}></span>${esc(m.urgency)}</span>` : ""}
@@ -289,7 +292,7 @@ function renderMoves() {
         <span class="conf" data-tip="Chance the added player actually outproduces the dropped one over the move's horizon${S.calibration?.n ? ", calibrated on " + S.calibration.n + " scored moves" : " (uncalibrated until moves are scored)"}">
           Confidence <span class="meter"><span style="width:${m.confidence * 100}%"></span></span><b class="num">${pct(m.confidence)}</b></span>
         <span style="margin-left:auto"></span>
-        <button class="btn" data-act="executed" data-i="${i}">${ICON.check.replace("<svg", '<svg style="width:14px;height:14px"')} I made this move</button>
+        <button class="btn" data-act="executed" data-i="${i}">${ICON.check.replace("<svg", '<svg style="width:14px;height:14px"')} ${m.availability?.status === "W" ? "I put in this claim" : "I made this move"}</button>
         <button class="btn ghost" data-act="dismissed" data-i="${i}">Dismiss</button>
         <button class="btn ghost" data-watch="${m.add}" data-vs="${m.drop}" title="Track how he does vs ${esc(m.drop_name)} without making the move">☆ Watch</button>
       </div>
@@ -300,6 +303,7 @@ function renderMoves() {
     if (!found.id) { b.textContent = "Not in ledger yet (only top 3 are logged)"; return; }
     const res = await api(`/api/moves/${found.id}`, { method: "POST", body: JSON.stringify({ status: b.dataset.act }) }).catch((e) => ({ error: e.message }));
     b.closest(".actions").innerHTML = `<span class="small muted">${res.error ? "Couldn't apply: " + esc(res.error)
+      : res.claimed ? `Claim noted. Your roster isn't changed yet: once it clears${res.until ? " (" + esc(shortDate(res.until)) + ")" : ""}, paste the transaction log and it's applied and logged.`
       : b.dataset.act === "executed" ? (res.roster_updated ? "Roster updated and logged; it'll be scored against real box scores. Re-running the model…" : "Logged as made: it'll be scored against real box scores.")
       : "Dismissed: still scored as a counterfactual, so the model learns either way."}</span>`;
     if (res.roster_updated) afterManualChange();

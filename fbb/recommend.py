@@ -93,6 +93,9 @@ def describe(ctx, B, m, with_urgency=True) -> dict:
     m["add_team"], m["drop_team"] = ctx.team_of(m["add"]), ctx.team_of(m["drop"])
     m["add_games"] = len(sim.player_games(ctx, m["add"], dates))
     m["drop_games"] = len(sim.player_games(ctx, m["drop"], dates))
+    if ((ctx.injuries.get(m["drop"]) or {}).get("status") or "").lower() == "out":
+        m["rationale"].insert(0, f"{m['drop_name']} is listed Out: if you have a free IL slot, move him there "
+                                 f"and add {m['add_name']} without dropping anyone")
     from . import free_agents
     av = free_agents.availability(m["add"])
     m["availability"] = av
@@ -124,7 +127,20 @@ def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11, log=True, budget=No
     listed = [p for p in free_agents.listed_ids() if p in ctx.proj.index and p not in rostered
               and isinstance(ctx.team_of(p), str) and in_rotation(ctx, p)]
     adds = list(dict.fromkeys(by_ros + by_week + listed))
-    drops = sorted(mine, key=lambda p: ros_value(ctx, p))[:SCREEN_DROPS]
+    # Players in IL slots don't count toward the roster limit: dropping one opens nothing,
+    # and having one there may leave an open spot (an add with no drop at all).
+    from . import lineup
+    slots = sim.team_slots(ctx).get(ctx.my_key, {})
+    il = {p for p in mine if slots.get(p) in lineup.NOT_STARTABLE}
+    drops = sorted((p for p in mine if p not in il), key=lambda p: ros_value(ctx, p))[:SCREEN_DROPS]
+    open_spots = max(0, ctx.roster_size - (len(mine) - len(il)))
+    open_spot = None
+    if open_spots:
+        best = sorted((score_swap(ctx, B, a, None) for a in adds), key=lambda m: -m["score"])[:3]
+        from . import free_agents
+        open_spot = {"spots": open_spots, "adds": [
+            {"add": int(m["add"]), "add_name": ctx.name(m["add"]), "add_team": ctx.team_of(m["add"]),
+             "score": m["score"], "availability": free_agents.availability(m["add"])} for m in best]}
 
     cands = sorted((score_swap(ctx, B, a, d) for a in adds for d in drops), key=lambda m: -m["score"])
     picked, used_adds, drop_count = [], set(), {}
@@ -147,7 +163,7 @@ def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11, log=True, budget=No
                 m["urgency"], m["urgency_reason"] = "Marginal", "only one add left this week: save it for the top move"
     if log:
         learning.log_suggestions(ctx, picked[:3])
-    return {"moves": picked, "add_budget": budget,
+    return {"moves": picked, "add_budget": budget, "open_spot": open_spot,
             "screened": {"free_agents": len(adds), "drops": len(drops), "swaps": len(cands)},
             "base": {"week_win": B["base_win"], "season_strength": B["base_season"],
                      "effective_weeks": B["eff"], "cat_probs": B["base_cats"]}}

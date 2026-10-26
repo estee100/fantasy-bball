@@ -52,7 +52,7 @@ def horizon_end(ctx, kind) -> str:
 
 
 def set_move_status(move_id: int, status: str):
-    assert status in ("executed", "dismissed", "suggested")
+    assert status in ("executed", "dismissed", "suggested", "claimed")
     with db.cursor() as c:
         c.execute("UPDATE moves SET status=?, executed_at=? WHERE id=?",
                   (status, db.now_iso() if status == "executed" else None, move_id))

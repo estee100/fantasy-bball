@@ -149,6 +149,7 @@ def import_log(text: str, today=None) -> dict:
             out["already_reflected"].append(label)
         _update_fa_list(t)
     db.kv_set("yahoo_txn_seen", sorted(seen))
+    db.kv_set("yahoo_log_imported", db.now_iso())
     db.kv_set("team_aliases", aliases)
 
     # your moves -> History, unless those players are already recorded there
@@ -171,8 +172,13 @@ def import_log(text: str, today=None) -> dict:
             eff = (t["when"] or datetime.now().astimezone()).date().isoformat()
             # apply only what your roster doesn't show yet
             apply = (not set(ins) <= roster) or bool(set(outs) & roster)
+            with db.cursor() as c:
+                mv = c.execute("SELECT id FROM moves WHERE status='claimed' AND add_id IN (%s) ORDER BY id DESC LIMIT 1"
+                               % ",".join("?" * len(ins)), ins).fetchone() if ins else None
+                if mv:
+                    c.execute("UPDATE moves SET status='executed', executed_at=? WHERE id=?", (db.now_iso(), mv["id"]))
             history.record(ctx, kind, ins, outs, effective=eff, source="yahoo-log", apply=apply,
-                           note="from the pasted Yahoo transaction log")
+                           note="from the pasted Yahoo transaction log", move_id=mv["id"] if mv else None)
             out["your_moves_logged"].append(desc)
     return out
 

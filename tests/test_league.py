@@ -458,3 +458,17 @@ def test_deleting_a_history_entry_reverts_the_roster(ctx, monkeypatch):
         assert c.execute("SELECT 1 FROM rosters WHERE team_key=? AND nba_id=?", (ctx.my_key, add)).fetchone() is None
         assert c.execute("SELECT 1 FROM rosters WHERE team_key=? AND nba_id=?", (ctx.my_key, drop)).fetchone()
         assert c.execute("SELECT count(*) FROM league_moves WHERE nba_id IN (?,?) AND source='manual'", (add, drop)).fetchone()[0] == 0
+
+
+def test_il_players_are_never_suggested_drops_and_open_spots_are_found(ctx, monkeypatch):
+    from fbb import db, recommend, learning
+    monkeypatch.setattr(learning, "log_suggestions", lambda *a, **k: None)
+    me = ctx.rosters[ctx.my_key]
+    il_player = me[0]
+    with db.cursor() as c:
+        c.execute("UPDATE rosters SET slot='IL' WHERE team_key=? AND nba_id=?", (ctx.my_key, il_player))
+    ctx._pools.clear()
+    r = recommend.recommend(ctx, n_sims=300, log=False)
+    assert all(m["drop"] != il_player for m in r["moves"])
+    if len(me) - 1 < ctx.roster_size:
+        assert r["open_spot"] and r["open_spot"]["spots"] >= 1

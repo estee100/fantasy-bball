@@ -217,14 +217,16 @@ def readiness() -> list:
         info = manual.summary()
         others = [t for t in info["teams"] if not t["is_mine"]]
         stale = []
+        log_at = db.kv_get("yahoo_log_imported")   # a transaction-log import keeps every roster current
         for t in info["teams"]:
-            if t["updated"]:
-                age_d = (now - datetime.fromisoformat(t["updated"])).days
+            seen = max([x for x in (t["updated"], log_at) if x], default=None)
+            if seen:
+                age_d = (now - datetime.fromisoformat(seen)).days
                 if age_d >= 7:
                     stale.append(t["name"])
         checks.append({"name": "Pasted rosters", "ok": len(others) >= info["num_teams"] - 1 and not stale,
                        "detail": f"{len(others)} of {info['num_teams'] - 1} other teams pasted"
-                                 + (f"; over a week old: {', '.join(stale)}" if stale else "")
+                                 + (f"; not updated for a week (paste the transaction log): {', '.join(stale)}" if stale else "")
                                  + ("" if info["opponent_key"] else "; no opponent picked")})
         fa = db.kv_get("fa_list")
         if not fa:

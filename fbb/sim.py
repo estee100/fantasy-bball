@@ -136,18 +136,18 @@ def calibrated(p: float, params: dict) -> float:
 
 
 def actual_totals(ctx, team_key, start: str, end: str):
-    """A team's real totals for a past week from box scores, starters only where slots are known."""
-    pids = ctx.rosters.get(team_key, [])
-    slots = team_slots(ctx).get(team_key, {})
-    if slots and any(s not in ("?", None) for s in slots.values()):
-        pids = [p for p in pids if slots.get(p) not in BENCH_SLOTS]
-    g = ctx.logs[(ctx.logs["game_date"] >= start) & (ctx.logs["game_date"] <= end) & ctx.logs["nba_id"].isin(pids)]
-    val = ctx.values["value"]
-    tot = np.zeros(len(SIM_STATS))
-    for _, day in g.groupby("game_date"):
-        day = day.assign(v=day["nba_id"].map(val).fillna(-99)).nlargest(ctx.active_slots, "v")
-        tot += day[SIM_STATS].to_numpy(dtype=float).sum(0)
-    return tot
+    """A team's real totals for a past week from box scores: the same rules as week-to-date
+    (who was on the team at each tip-off; that day's recorded lineup, else the best lineup by
+    projection). It used to apply today's slots to the whole week, which would have graded a
+    week as if most of a team sat whenever the lineup was saved on a light day."""
+    import copy
+    wc = copy.copy(ctx)
+    wc._pools = {k: v for k, v in ctx._pools.items() if k == "_tips"}
+    wc.week_start = start
+    wc.today = (date.fromisoformat(end) + timedelta(days=1)).isoformat()
+    wc.logs = ctx.logs[ctx.logs["game_date"].astype(str).str[:10] <= end]
+    tot = estimate_wtd(wc, ctx.rosters.get(team_key, []), team_key)
+    return np.array([tot[k] for k in SIM_STATS], dtype=float)
 
 
 def default_week_range():

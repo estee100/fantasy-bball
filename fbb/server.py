@@ -251,6 +251,16 @@ def move_status(move_id: int, s: StatusIn):
     if s.status not in ("executed", "dismissed", "suggested"):
         raise HTTPException(400, "bad status")
     applied = False
+    if s.status == "executed":
+        # A waiver player can't be added yet: it's a claim. Changing the roster now made the app
+        # show a move that hadn't happened (Oct 2026: Bane in / White out before the claim ran).
+        from . import free_agents
+        with db.cursor() as c:
+            mv = c.execute("SELECT add_id FROM moves WHERE id=?", (move_id,)).fetchone()
+        av = free_agents.availability(mv["add_id"]) if mv else {}
+        if av.get("status") == "W":
+            learning.set_move_status(move_id, "claimed")
+            return {"ok": True, "roster_updated": False, "claimed": True, "until": av.get("until")}
     if s.status == "executed" and db.kv_get("league_source") == "manual":
         # manual mode has no Yahoo sync to notice the change: apply it to the pasted roster
         from . import manual
