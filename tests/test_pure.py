@@ -90,7 +90,8 @@ def test_injury_timelines(note, lo, hi):
 def test_start_of_season_is_not_season_ending():
     note = "Ingram won't be ready for the start of the season due to a partially torn plantar fascia"
     assert not model.SEASON_ENDING.search(note.lower())
-    assert model.injury_games_out(note, "Out", TODAY) is None
+    g = model.injury_games_out(note, "Out", TODAY)
+    assert g is not None and 5 <= g <= 30  # a tear with no timeline: weeks, not the season
 
 
 # ---------------------------------------------------------------- Yahoo parsing
