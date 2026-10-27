@@ -409,8 +409,9 @@ def test_games_in_progress_are_not_stored(league_db, monkeypatch):
     nba.ingest_logs()   # nothing new to store, but nothing breaks
 
 
-def test_model_team_respects_add_limit_and_ownership(ctx):
+def test_model_team_respects_add_limit_and_ownership(ctx, monkeypatch):
     from fbb import shadow, db
+    monkeypatch.setattr(shadow, "_daily_due", lambda *a: True)   # not dependent on the clock
     me = ctx.rosters[ctx.my_key]
     shadow.start(list(me), [], "2026-10-26")
     shadow._ensure()

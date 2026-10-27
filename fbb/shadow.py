@@ -126,8 +126,19 @@ def daily(ctx, today=None) -> dict:
     today = today or date.today().isoformat()
     if not s or today < s["started"] or s.get("last_daily") == today:
         return {"skipped": True}
+    if not _daily_due(ctx, s, today):
+        return {"skipped": "waiting for the morning news"}
     done = []
     limit = db.kv_get("roster_size", 13)
+
+    # 0. a player another (real) team actually has can't be the model's: its claim on him
+    #    lost (Oct 2026: it started with Bane, assumed claimed; Metapod got him)
+    real = {p: k for k, ids in ctx.rosters.items() if k != ctx.my_key for p in ids}
+    for p in list(s["roster"]) + list(s["il"]):
+        if p in real:
+            (s["roster"] if p in s["roster"] else s["il"]).remove(p)
+            _log(today, "lost", None, p, reason=f"{ctx.name(p)} is really on {ctx.teams.get(real[p], {}).get('name', 'another team')}")
+            done.append(f"lost {ctx.name(p)} (another team has him)")
 
     # 1. waiver claims whose period has ended
     for cl in list(s["pending"]):
@@ -191,6 +202,24 @@ def daily(ctx, today=None) -> dict:
     return {"moves": done}
 
 
+DAILY_HOUR = 10   # local: overnight injury news and morning updates are in by then
+
+
+def _daily_due(ctx, s, today) -> bool:
+    """After DAILY_HOUR, or earlier if one of its players tips off within 2 hours.
+    (It used to run on the first refresh after midnight, before the day's news.)"""
+    now = datetime.now().astimezone()
+    if now.hour >= DAILY_HOUR:
+        return True
+    first = _first_tip(ctx, s["roster"], today)
+    return bool(first and (first - now).total_seconds() < 2 * 3600)
+
+
+def _first_tip(ctx, pids, day):
+    tips = lineup.tip_times(ctx)
+    return min((t for p in pids if (t := tips.get((ctx.team_of(p), day)))), default=None)
+
+
 def _execute(ctx, s, today, add, drop, score, reason) -> str:
     from . import free_agents
     av = free_agents.availability(add)
@@ -214,12 +243,18 @@ def plan_lineup(ctx, now=None) -> list | None:
         return None
     now = now or datetime.now().astimezone()
     sc = _shadow_ctx(ctx, s)
-    plan = lineup.day_plan(sc, ctx.my_key, today, now=now)
-    first = plan.get("first_tip_utc")
+    # Frozen from the day's FIRST tip among its players. day_plan's first_tip is the next
+    # *unstarted* game, so checking that let it re-plan all evening, and each re-plan (it has
+    # no saved slots) dropped every player already locked: Oct 26 it "started" 2 of 8.
+    first = _first_tip(ctx, s["roster"], today)
     with db.cursor() as c:
         have = c.execute("SELECT 1 FROM shadow_days WHERE day=?", (today,)).fetchone()
-        if have and (not first or datetime.fromisoformat(first) <= now):
-            return None  # games have started: lineup is locked
+    if have and first and first <= now:
+        return None
+    if not have and first and first <= now:
+        now = first - timedelta(minutes=1)  # first plan of the day came late: plan as of tip-off
+    plan = lineup.day_plan(sc, ctx.my_key, today, now=now)
+    with db.cursor() as c:
         starters = [x["nba_id"] for x in plan["lineup"] if not x.get("empty")]
         c.execute("INSERT OR REPLACE INTO shadow_days(day, starters, opp_key, points, scored) VALUES (?,?,?,NULL,0)",
                   (today, json.dumps([int(p) for p in starters]), ctx.opp_key))
