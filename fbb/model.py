@@ -260,9 +260,22 @@ def injury_games_out(comment: str, status: str = "", today=None):
             ordered = sorted(date(today.year + (1 if (i + 1) < today.month else 0), i + 1, 1) for i in found)
             best = ordered[0] + (ordered[-1] - ordered[0]) / 2 + timedelta(days=14)
         return max(0.0, (best - today).days * GAMES_PER_DAY)
+    # No timeline, but the injury itself says it's long (Oct 2026: J. Williams' fractured fibula
+    # "will require surgery" read as no information, so he projected to play 64% of the season)
+    if SURGERY.search(c):
+        return SURGERY_WEEKS * 7 * GAMES_PER_DAY
+    if STRUCTURAL.search(c):
+        return STRUCTURAL_WEEKS * 7 * GAMES_PER_DAY
     if "day-to-day" in c or "game-time decision" in c:
         return 0.5
     return None
+
+
+# Priors for notes that name a serious injury but no timeline; any stated timeline wins.
+SURGERY = re.compile(r"\bsurger|\boperation\b|\bprocedure\b")
+SURGERY_WEEKS = 8
+STRUCTURAL = re.compile(r"\bfractur|\bbroken\b|\btorn\b|\btear\b|\brupture|\bdislocat")
+STRUCTURAL_WEEKS = 4
 
 
 def _games_out(pid, injuries, events):
