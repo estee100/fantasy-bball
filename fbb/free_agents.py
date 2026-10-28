@@ -109,8 +109,30 @@ def snapshot() -> dict | None:
     return dict(fa, age_days=age) if age <= FRESH_DAYS else None
 
 
+def set_yahoo_waivers(players: list):
+    """The Yahoo sync's full waiver list. Unlike a paste it covers everyone, so a player not on
+    it (and not rostered) is a confirmed free agent."""
+    db.kv_set("yahoo_waivers", {"created": db.now_iso(), "players": {str(p["nba_id"]): p for p in players}})
+
+
+def _yahoo_waivers() -> dict | None:
+    if db.kv_get("league_source") != "yahoo":
+        return None
+    w = db.kv_get("yahoo_waivers")
+    if not w or (datetime.now().astimezone() - datetime.fromisoformat(w["created"])).total_seconds() > 86400:
+        return None  # sync hasn't fetched it for a day: fall back to a paste, if any
+    return w
+
+
 def availability(pid) -> dict:
     """{'known': bool, 'listed': bool, 'status': 'FA'|'W'|None, 'until': date|None}"""
+    yw = _yahoo_waivers()
+    if yw is not None:
+        p = yw["players"].get(str(int(pid)))
+        until = p.get("until") if p else None
+        on_waivers = bool(until and until > date.today().isoformat())
+        return {"known": True, "listed": True, "status": "W" if on_waivers else "FA",
+                "until": until if on_waivers else None}
     fa = snapshot()
     if not fa:
         return {"known": False, "listed": False, "status": None, "until": None}
@@ -123,6 +145,9 @@ def availability(pid) -> dict:
 
 
 def listed_ids() -> list:
+    yw = _yahoo_waivers()
+    if yw is not None:
+        return [int(k) for k in yw["players"]]
     fa = snapshot()
     return [int(k) for k in fa["players"]] if fa else []
 

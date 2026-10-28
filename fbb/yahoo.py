@@ -251,6 +251,44 @@ def parse_roster_adds(node):
     return None
 
 
+def parse_waivers(raw) -> list:
+    """[(name, team, positions, waiver_date)] from a league players;status=W;out=ownership page."""
+    out = []
+    # not _get: it unwraps single-key dicts, and {"fantasy_content": ...} is one
+    league = (raw.get("fantasy_content") or {}).get("league") or []
+    players = league[1].get("players") if len(league) > 1 and isinstance(league[1], dict) else {}
+    for k, v in (players or {}).items():
+        if k == "count":
+            continue
+        meta = {kk: vv for d in v["player"][0] if isinstance(d, dict) for kk, vv in d.items()}
+        own = next((d["ownership"] for d in v["player"][1:] if isinstance(d, dict) and "ownership" in d), {})
+        out.append((meta["name"]["full"], meta.get("editorial_team_abbr", ""), meta.get("display_position", ""),
+                    own.get("waiver_date")))
+    return out
+
+
+def sync_waivers(q, league_key) -> None:
+    """Who's on waivers and until when. Everyone else not on a roster is a free agent, which the
+    synced rosters already tell us, so this is the one thing the pasted free-agent list added."""
+    from . import free_agents
+    idx, found, start = _player_index(), [], 0
+    while True:
+        raw = q.get_response(f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_key}"
+                             f"/players;status=W;count=25;start={start};out=ownership").json()
+        page = parse_waivers(raw)
+        for name, team, pos, until in page:
+            pid = _match(idx, name, team)
+            if pid:
+                found.append({"nba_id": int(pid), "status": "W", "until": until, "positions": pos})
+        if len(page) < 25:
+            break
+        start += 25
+    with db.cursor() as c:
+        c.executemany("UPDATE players SET positions=? WHERE nba_id=?",
+                      [(p["positions"], p["nba_id"]) for p in found if p["positions"]])
+    free_agents.set_yahoo_waivers(found)
+
+
 def _find_stats(node):
     if isinstance(node, dict):
         if "stat_id" in node and "value" in node:
@@ -330,6 +368,17 @@ def diagnose(q) -> list:
     return out
 
 
+def _followed_suggestion(ins, outs):
+    """The open suggestion (or pending waiver claim) this one-for-one roster change carries out."""
+    if len(ins) != 1 or len(outs) > 1:
+        return None
+    with db.cursor() as c:
+        row = c.execute("SELECT id FROM moves WHERE add_id=? AND (drop_id=? OR (? IS NULL AND drop_id IS NULL))"
+                        " AND status IN ('suggested', 'claimed') ORDER BY created DESC LIMIT 1",
+                        (ins[0], outs[0] if outs else None, outs[0] if outs else None)).fetchone()
+    return row["id"] if row else None
+
+
 def sync() -> dict:
     """Full sync. Detects your own roster changes and logs them for the learning loop."""
     q = query()
@@ -349,10 +398,20 @@ def sync() -> dict:
         if before is not None and set(before) != set(now):
             from . import history, sim
             ctx = sim.load_context()
-            history.record(ctx, "roster change", [p for p in now if p not in before],
-                           [p for p in before if p not in now], source="yahoo")
+            ins, outs = [p for p in now if p not in before], [p for p in before if p not in now]
+            mv = _followed_suggestion(ins, outs)
+            if mv:
+                # made in the Yahoo app: still a followed suggestion for the scorecard
+                learning.set_move_status(mv, "executed")
+                history.record(ctx, "add/drop" if outs else "add", ins, outs, source="suggestion", move_id=mv)
+            else:
+                history.record(ctx, "roster change", ins, outs, source="yahoo")
         db.kv_set("my_roster_last", now)
         sync_adds(q, r["my_key"])
+    try:
+        sync_waivers(q, db.kv_get("league_key"))
+    except Exception as e:  # without it, waiver status is just unknown
+        log.warning("waiver list unavailable: %s", e)
     db.kv_set("yahoo_synced", db.now_iso())
     return dict(info, my_key=r["my_key"], unmatched=db.kv_get("unmatched_players", []))
 

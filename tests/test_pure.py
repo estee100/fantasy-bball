@@ -112,6 +112,17 @@ def test_parse_roster_adds_reads_weekly_count():
     assert yahoo.parse_roster_adds({"fantasy_content": {"team": [[{"team_key": "x"}]]}}) is None
 
 
+def test_parse_waivers_reads_name_team_positions_and_date():
+    # shape of a real league players;status=W;out=ownership response
+    raw = {"fantasy_content": {"league": [{"league_key": "x"}, {"players": {
+        "0": {"player": [[{"player_key": "478.p.4614"}, {"name": {"full": "DeMar DeRozan"}}, [],
+                          {"editorial_team_abbr": "DEN"}, {"display_position": "SF,PF"}],
+                         {"ownership": {"waiver_date": "2026-10-28", "ownership_type": "waivers"}}]},
+        "count": 1}}]}}
+    assert yahoo.parse_waivers(raw) == [("DeMar DeRozan", "DEN", "SF,PF", "2026-10-28")]
+    assert yahoo.parse_waivers({"fantasy_content": {"league": [{"league_key": "x"}, {"players": []}]}}) == []
+
+
 # ---------------------------------------------------------------- calibration math
 
 def test_temperature_pulls_toward_half():

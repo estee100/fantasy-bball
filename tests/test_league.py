@@ -269,6 +269,7 @@ def test_free_agent_paste_reads_status_waivers_and_positions(ctx, pid):
 def test_free_agent_list_cleans_outdated_rosters_and_flags_waivers(ctx, pid):
     from datetime import date
     from fbb import free_agents, db
+    db.kv_set("yahoo_waivers", None)  # the paste is the fallback when the sync has no waiver list
     other = next(k for k in ctx.rosters if k != ctx.my_key)
     victim = ctx.rosters[other][0]
     text = f"{ctx.name(victim)}\n{ctx.name(victim)}Player Note XXX - PG\nFA\nSanti Aldama\nSanti AldamaPlayer Note DAL - PF,C\nW (Dec 31)\n"
@@ -278,6 +279,29 @@ def test_free_agent_list_cleans_outdated_rosters_and_flags_waivers(ctx, pid):
         assert c.execute("SELECT 1 FROM rosters WHERE team_key=? AND nba_id=?", (other, victim)).fetchone() is None
     assert free_agents.availability(pid("Santi Aldama"))["status"] == "W"
     assert free_agents.availability(pid("Nikola Jokić"))["listed"] is False
+
+
+def test_move_made_in_yahoo_is_matched_to_its_suggestion(ctx, pid):
+    from fbb import db, yahoo
+    a, d = pid("Santi Aldama"), pid("Nikola Jokić")
+    with db.cursor() as c:
+        mid = c.execute("INSERT INTO moves(created, week, add_id, drop_id, status, kind) VALUES (?,?,?,?,?,?)",
+                        (db.now_iso(), 1, a, d, "suggested", "upgrade")).lastrowid
+    assert yahoo._followed_suggestion([a], [d]) == mid
+    assert yahoo._followed_suggestion([a], []) is None          # different move: no drop
+    assert yahoo._followed_suggestion([a, d], [d]) is None      # not one-for-one
+
+
+def test_yahoo_waiver_list_confirms_everyone_else_is_a_free_agent(ctx, pid):
+    from fbb import free_agents, db
+    db.kv_set("league_source", "yahoo")
+    free_agents.set_yahoo_waivers([{"nba_id": pid("Santi Aldama"), "status": "W", "until": "2099-01-01",
+                                    "positions": "PF,C"}])
+    assert free_agents.availability(pid("Santi Aldama")) == {"known": True, "listed": True, "status": "W",
+                                                             "until": "2099-01-01"}
+    # not on the waiver list: a confirmed free agent, not "beyond the pages you pasted"
+    assert free_agents.availability(pid("Nikola Jokić"))["status"] == "FA"
+    assert free_agents.availability(pid("Nikola Jokić"))["listed"] is True
 
 
 # ---------------------------------------------------------------- weekly add limit & locks
