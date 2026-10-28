@@ -22,8 +22,10 @@ REFRESH_MINUTES = 15
 @asynccontextmanager
 async def lifespan(app):
     sched = BackgroundScheduler()
+    # next_run_time=None would add the job *paused* (APScheduler): leave it out unless running now
+    first = _now_if_stale()
     sched.add_job(pipeline.refresh, "interval", minutes=REFRESH_MINUTES, id="refresh",
-                  next_run_time=_now_if_stale(), max_instances=1, coalesce=True)
+                  max_instances=1, coalesce=True, **({"next_run_time": first} if first else {}))
     sched.add_job(lambda: pipeline.refresh(daily=True), "cron", hour=9, minute=5, id="daily")
     sched.start()
     yield
