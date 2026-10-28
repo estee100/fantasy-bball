@@ -1,8 +1,7 @@
 """Transaction history: every roster change you make, scored against what actually happened.
 
-A transaction is "players in" vs "players out" on an effective date. It doesn't matter where
-it came from (a suggestion you followed, your own call, a trade, a paste you updated days
-later, or later the Yahoo feed): each one stores
+A transaction is "players in" vs "players out" on an effective date, from Yahoo's transaction
+log (a suggestion you followed, your own call, or a trade): each one stores
 
   what the model thought at the time   (per-game projections then; expected wins for 1-for-1
                                         moves and trades)
@@ -93,22 +92,20 @@ def predict(ctx, kind, ins, outs, effective, other_key=None) -> dict:
 
 
 def record(ctx, kind: str, ins: list, outs: list, effective: str | None = None, other_key=None,
-           source="manual", note="", move_id=None, apply=False, yahoo_key=None, moves_logged=False) -> int:
-    """Log a roster change on your team. apply=True also makes the change to the pasted
-    rosters (manual mode); the roster editor and pastes call this after they've applied.
+           source="yahoo", note="", move_id=None, yahoo_key=None, moves_logged=False) -> int:
+    """Log a roster change on your team, which the Yahoo sync has already found on the roster.
     moves_logged: the caller already stored the exact add/drop times (Yahoo's transaction log)."""
     _ensure()
-    from . import manual
     effective = effective or date.today().isoformat()
     ins, outs = [int(p) for p in ins], [int(p) for p in outs]
     me = ctx.my_key
-    # The model's view must be of the roster BEFORE the move. With apply=True the stored
-    # roster still is; otherwise the caller already changed it, so rebuild the before-state.
+    # The model's view must be of the roster BEFORE the move; the stored roster already has
+    # it, so rebuild the before-state.
     current = list(ctx.rosters.get(me, []))
-    before = current if apply else [p for p in current if p not in ins] + [p for p in outs if p not in current]
+    before = [p for p in current if p not in ins] + [p for p in outs if p not in current]
     saved = dict(ctx.rosters)
     other_before = None
-    if kind == "trade" and other_key and not apply:
+    if kind == "trade" and other_key:
         other_before = [p for p in ctx.rosters.get(other_key, []) if p not in outs] + ins
     try:
         ctx.rosters[me] = before
@@ -120,8 +117,6 @@ def record(ctx, kind: str, ins: list, outs: list, effective: str | None = None, 
         ctx.rosters.clear()
         ctx.rosters.update(saved)
         ctx._pools.pop("_opp_dists", None)
-    if apply:
-        _apply(ctx, kind, ins, outs, other_key)
     with db.cursor() as c:
         cur = c.execute("""INSERT INTO transactions(created, effective, kind, team_key, other_key, players_in,
                            players_out, source, note, move_id, yahoo_key, prediction)
@@ -129,7 +124,7 @@ def record(ctx, kind: str, ins: list, outs: list, effective: str | None = None, 
                         (db.now_iso(), effective, kind, me, other_key, json.dumps(ins), json.dumps(outs),
                          source, note, move_id, yahoo_key, json.dumps(pred, default=float)))
         tid = cur.lastrowid
-    if source != "yahoo-log" and not moves_logged:   # the Yahoo log stores exact times itself
+    if not moves_logged:
         _log_moves(me, kind, ins, outs, other_key, effective, db.now_iso(), source)
     if me:
         db.kv_set("my_roster_last", _roster(me))
@@ -137,8 +132,8 @@ def record(ctx, kind: str, ins: list, outs: list, effective: str | None = None, 
 
 
 def _log_moves(me, kind, ins, outs, other_key, effective, created, source):
-    """Timestamped adds/drops for week-to-date scoring. Entered today: the time it was
-    entered; backdated: start of that day (local)."""
+    """Approximate add/drop times, for a move the sync found without Yahoo's transaction log:
+    found today, the time it was found; earlier, start of that day (local)."""
     from datetime import datetime
     when = datetime.fromisoformat(created).astimezone()
     ts = when.isoformat() if when.date().isoformat() == effective else \
@@ -154,98 +149,27 @@ def _log_moves(me, kind, ins, outs, other_key, effective, created, source):
             db.add_move(other_key, ts, p, "drop", source)
 
 
-def backfill_moves():
-    """One-off: timestamps for History entries made before league_moves existed."""
-    _ensure()
-    with db.cursor() as c:
-        rows = c.execute("SELECT * FROM transactions WHERE deleted=0 AND source<>'yahoo-log'").fetchall()
-    for r in rows:
-        _log_moves(r["team_key"], r["kind"], json.loads(r["players_in"]), json.loads(r["players_out"]),
-                   r["other_key"], r["effective"], r["created"], r["source"])
-    return len(rows)
-
-
 def _roster(key):
     with db.cursor() as c:
         return [r[0] for r in c.execute("SELECT nba_id FROM rosters WHERE team_key=?", (key,))]
 
 
-def _apply(ctx, kind, ins, outs, other_key):
-    """Make the change to the stored rosters (manual mode), validating ownership first."""
-    me = ctx.my_key
-    with db.cursor() as c:
-        owner = {r["nba_id"]: r["team_key"] for r in c.execute("SELECT nba_id, team_key FROM rosters")}
-        names = {r["team_key"]: r["name"] for r in c.execute("SELECT team_key, name FROM fantasy_teams")}
-    for p in outs:
-        if owner.get(p) != me:
-            raise ValueError(f"{ctx.name(p)} isn't on your team")
-    for p in ins:
-        o = owner.get(p)
-        if kind == "trade":
-            if o != other_key:
-                raise ValueError(f"{ctx.name(p)} isn't on {names.get(other_key, 'the other team')}")
-        elif o:
-            raise ValueError(f"{ctx.name(p)} is on {names.get(o, o)}; record a trade instead")
-    with db.cursor() as c:
-        for p in outs:
-            c.execute("DELETE FROM rosters WHERE team_key=? AND nba_id=?", (me, p))
-            if kind == "trade":
-                c.execute("INSERT OR REPLACE INTO rosters VALUES (?,?,?)", (other_key, p, "BN"))
-        for p in ins:
-            if kind == "trade":
-                c.execute("DELETE FROM rosters WHERE team_key=? AND nba_id=?", (other_key, p))
-            c.execute("INSERT OR REPLACE INTO rosters VALUES (?,?,?)", (me, p, "BN"))
-    from . import manual
-    for k in filter(None, (me, other_key if kind == "trade" else None)):
-        manual._touch(k)
-
-
-def update(tid: int, effective=None, note=None):
-    _ensure()
-    with db.cursor() as c:
-        if effective:
-            # a new date means a new scoring window: re-evaluate from scratch
-            c.execute("UPDATE transactions SET effective=?, eval=NULL, evaluated_at=NULL WHERE id=?", (effective, tid))
-        if note is not None:
-            c.execute("UPDATE transactions SET note=? WHERE id=?", (note, tid))
-
-
-def delete(tid: int, revert=True) -> dict:
-    """Remove a mistaken entry. revert=True also undoes its roster change, its timestamped
-    moves and its 'executed' mark on a suggestion, as long as the roster still shows the
-    move (if you've changed those players since, the roster is left alone and that's said)."""
+def delete(tid: int) -> dict:
+    """Remove an entry from History, and its 'executed' mark on a suggestion. Yahoo's own move
+    times stay: the move really happened, and week-to-date scoring needs it."""
     _ensure()
     with db.cursor() as c:
         t = c.execute("SELECT * FROM transactions WHERE id=?", (tid,)).fetchone()
         if t is None:
             raise ValueError("No such entry")
         c.execute("UPDATE transactions SET deleted=1 WHERE id=?", (tid,))
-    out = {"deleted": tid, "roster_reverted": False}
-    if not revert:
-        return out
-    ins, outs = json.loads(t["players_in"]), json.loads(t["players_out"])
-    me, other = t["team_key"], t["other_key"]
-    with db.cursor() as c:
-        held = {r["nba_id"]: r["team_key"] for r in c.execute("SELECT team_key, nba_id FROM rosters")}
-        still = all(held.get(p) == me for p in ins) and all(held.get(p) in (None, other) for p in outs)
-        if still:
-            for p in ins:
-                c.execute("DELETE FROM rosters WHERE team_key=? AND nba_id=?", (me, p))
-                if t["kind"] == "trade" and other:
-                    c.execute("INSERT OR REPLACE INTO rosters VALUES (?,?,?)", (other, p, "BN"))
-            for p in outs:
-                c.execute("DELETE FROM rosters WHERE nba_id=?", (p,))
-                c.execute("INSERT OR REPLACE INTO rosters VALUES (?,?,?)", (me, p, "BN"))
-            out["roster_reverted"] = True
-        else:
-            out["note"] = "Roster not changed: those players have moved since. Fix it in the roster editor."
-        c.execute("DELETE FROM league_moves WHERE source=? AND team_key IN (?, ?) AND nba_id IN (%s)"
-                  % ",".join("?" * len(ins + outs)), [t["source"], me, other or me] + ins + outs) if ins + outs else None
+        ins, outs = json.loads(t["players_in"]), json.loads(t["players_out"])
+        if ins + outs:  # approximate times from the roster-comparison fallback
+            c.execute("DELETE FROM league_moves WHERE source=? AND team_key IN (?, ?) AND nba_id IN (%s)"
+                      % ",".join("?" * len(ins + outs)), [t["source"], t["team_key"], t["other_key"] or t["team_key"]] + ins + outs)
         if t["move_id"]:
             c.execute("UPDATE moves SET status='suggested', executed_at=NULL WHERE id=? AND status='executed'", (t["move_id"],))
-    if me:
-        db.kv_set("my_roster_last", _roster(me))
-    return out
+    return {"deleted": tid}
 
 
 def evaluate(ctx) -> int:

@@ -15,7 +15,6 @@ os.environ["FBB_NO_ALERTS"] = "1"   # the suite must never push real notificatio
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-FIXTURES = Path(__file__).parent / "fixtures"
 
 from fbb import config, db  # noqa: E402
 
@@ -55,7 +54,3 @@ def pid(ctx):
         return hits[0]
     return find
 
-
-@pytest.fixture
-def paste_text():
-    return (FIXTURES / "yahoo_team_paste.txt").read_text(encoding="utf-8")

@@ -77,7 +77,7 @@ def _shadow_ctx(ctx, s):
     sc.rosters = dict(ctx.rosters)
     real_mine = set(ctx.rosters.get(ctx.my_key, []))
     sc.rosters[ctx.my_key] = list(s["roster"])
-    sc._pools = {"_slots": {ctx.my_key: {}}}           # no pasted slots: it manages its own
+    sc._pools = {"_slots": {ctx.my_key: {}}}           # no Yahoo slots: it manages its own
     owned = ({p for k, ids in ctx.rosters.items() if k != ctx.my_key for p in ids}
              | real_mine | set(s["roster"]) | set(s["il"]) | {c["add"] for c in s["pending"]})
     sc.rostered = lambda: owned

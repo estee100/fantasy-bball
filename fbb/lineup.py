@@ -47,7 +47,7 @@ ESPN_WIDEN = {"PG": {"PG", "SG"}, "SG": {"PG", "SG", "SF"}, "SF": {"SG", "SF", "
 
 
 def positions(ctx, pid, mode="widened") -> tuple[set, str]:
-    """(eligible base positions, source). Yahoo/paste eligibility first, ESPN's coarse
+    """(eligible base positions, source). Yahoo eligibility first, ESPN's coarse
     position as a fallback (widened unless mode='strict'); unknown players fill Util only."""
     row = ctx.players.loc[pid] if pid in ctx.players.index else None
     if row is not None:
@@ -196,7 +196,7 @@ def day_plan(ctx, team_key, d, opp_map=None, now=None) -> dict:
         else:
             why = "lower expected points than the starters" if pw else "lower value than the starters"
         bench.append(dict(x, reason=why))
-    # your current lineup's expected total (pasted slots; players without a game score 0)
+    # your current lineup's expected total (Yahoo slots as of the last sync; players without a game score 0)
     cur = sum(info[p]["ev"] for p in roster if cur_slots.get(p) not in NOT_STARTING)
     to_start = [info[p]["name"] for p in started if cur_slots.get(p) in ("BN", None, "?")]
     # Who has to move out in Yahoo: starters with a game who lost their spot, plus only as many
@@ -230,23 +230,6 @@ def week_plan(ctx, team_key=None) -> dict:
     return {"days": days, "today": (ctx.today or date.today().isoformat()),
             "week_gain": sum(x["gain"] for x in days), "slots": slot_list(),
             "unit": "fantasy pts" if model.scoring_mode() == "points" else "value"}
-
-
-def apply_today(ctx, team_key=None) -> dict:
-    """Write today's optimal lineup into your pasted slots (so week-to-date scoring follows
-    it). Yahoo itself still has to be set by you."""
-    team_key = team_key or ctx.my_key
-    plan = day_plan(ctx, team_key, (ctx.today or date.today().isoformat()))
-    with db.cursor() as c:
-        cur = {r["nba_id"]: r["slot"] for r in c.execute("SELECT nba_id, slot FROM rosters WHERE team_key=?", (team_key,))}
-        started = {x["nba_id"]: x["slot"] for x in plan["lineup"] if not x.get("empty")}
-        for pid, slot in cur.items():
-            if slot in NOT_STARTABLE:
-                continue
-            c.execute("UPDATE rosters SET slot=? WHERE team_key=? AND nba_id=?",
-                      (started.get(pid, "BN"), team_key, pid))
-    db.snapshot_lineup(team_key, plan["date"])
-    return {"ok": True, "started": len(started)}
 
 
 # ---------------------------------------------------------------- fast fill for the simulator

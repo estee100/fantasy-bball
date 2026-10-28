@@ -250,7 +250,6 @@ tbody tr.click:hover { background: var(--surface-2); }
 textarea { width: 100%; min-height: 140px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--ink); padding: 10px; font: 13px/1.45 var(--font); }
 
 /* ------------------------------------------------------------------ points league + setup */
-.warn-banner { margin-bottom: 16px; border-left: 3px solid var(--warning); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .score-line { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
 .score-line .big { font-size: 30px; font-weight: 650; letter-spacing: -0.02em; }
 .score-line .vs { color: var(--muted); }
@@ -261,12 +260,11 @@ textarea { width: 100%; min-height: 140px; border: 1px solid var(--border); bord
 .pair-row .nums { text-align: right; color: var(--ink-2); line-height: 1.25; }
 .setting-row { display: grid; grid-template-columns: 1fr 90px; gap: 8px; align-items: center; padding: 4px 0; font-size: 13px; }
 .setting-row input { width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; text-align: right; }
-.setting-sep { font-weight: 600; font-size: 12px; color: var(--ink-2); margin: 10px 0 2px; }
 
 section[data-panel="setup"] { max-width: 1320px; margin: 0 auto; padding: 20px; }
 @media (max-width: 520px) { section[data-panel="setup"] { padding: 16px; } }
 
-/* ------------------------------------------------------------------ watchlist + roster editor */
+/* ------------------------------------------------------------------ watchlist */
 .watch-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
 @media (max-width: 520px) { .watch-grid { grid-template-columns: 1fr; } }
 .watch-card { padding: 14px 16px; display: grid; gap: 10px; }
@@ -277,9 +275,7 @@ section[data-panel="setup"] { max-width: 1320px; margin: 0 auto; padding: 20px; 
 .watch-card .vs b { display: block; font-size: 15px; color: var(--ink); }
 .spark { display: flex; align-items: flex-end; gap: 2px; height: 34px; }
 .spark span { flex: 1; border-radius: 2px 2px 0 0; min-height: 2px; }
-.editor-row { display: grid; grid-template-columns: 90px 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--grid); }
-.editor-row:last-child { border-bottom: 0; }
-.editor-row select, select.btn { padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; }
+select.btn { padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; }
 
 /* ------------------------------------------------------------------ history */
 .tx { display: grid; grid-template-columns: 92px 1fr auto; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--grid); align-items: start; }

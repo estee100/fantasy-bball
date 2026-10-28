@@ -44,7 +44,7 @@ def refresh(daily=False) -> dict:
         return {"skipped": "refresh already running"}
     try:
         status = db.kv_get("pipeline_status", {})
-        if not (config.yahoo_authorized() and db.kv_get("yahoo_sync_verified")):
+        if not config.yahoo_authorized():
             status.pop("yahoo", None)  # sync isn't running: its old error is stale
         if daily or db.kv_get("daily_done") != date.today().isoformat():
             _step(status, "player_directory", nba.ingest_player_directory)
@@ -56,14 +56,9 @@ def refresh(daily=False) -> dict:
         _step(status, "game_logs", nba.ingest_logs, [config.SEASON])
         _step(status, "injuries", news.fetch_injuries)
         _step(status, "news", news.fetch_news)
-        if config.yahoo_authorized() and db.kv_get("yahoo_sync_verified"):
+        if config.yahoo_authorized():
             from . import yahoo
             _step(status, "yahoo", yahoo.sync)
-        elif config.yahoo_authorized() and not db.kv_get("yahoo_access_live"):
-            # The sync has never run on real Yahoo data: until it's verified on a copy of the
-            # database, only check whether Yahoo has switched access on (and say so once).
-            from . import yahoo
-            _step(status, "yahoo_probe", yahoo.probe)
         elif not db.kv_get("league_source"):
             from . import demo
             _step(status, "demo_league", demo.build)
@@ -83,7 +78,7 @@ def refresh(daily=False) -> dict:
         if ctx.rosters.get(ctx.opp_key):
             m = _step(status, "matchup_sim", sim.simulate_matchup, ctx)
         else:
-            db.kv_set("matchup", None)  # no opponent known yet (manual mode)
+            db.kv_set("matchup", None)  # no opponent known yet
         if m:
             learning.record_matchup_prediction(ctx, m)
             db.kv_set("matchup", {k: v for k, v in m.items() if k not in ("a", "b")})
@@ -186,20 +181,12 @@ def readiness() -> list:
         um = db.kv_get("unmatched_players", [])
         checks.append({"name": "Player matching", "ok": not um,
                        "detail": "all matched" if not um else "unmatched: " + ", ".join(um[:5])})
-    elif config.yahoo_authorized() and db.kv_get("yahoo_access_live") and not db.kv_get("yahoo_sync_verified"):
-        checks.append({"name": "Yahoo API", "ok": False,
-                       "detail": "access is ON: tell Claude, so it can verify the sync on a copy and switch over"})
-    elif config.yahoo_authorized() and not db.kv_get("yahoo_sync_verified"):
-        # Approved 2026-10-23; access turns on once Yahoo processes the DocuSign + confirmation
-        # form. Each refresh probes for it (see yahoo.probe); pasted rosters until then.
-        checks.append({"name": "Yahoo API", "ok": False,
-                       "detail": "approved; waiting for Yahoo to switch access on (checked every refresh)"})
     elif config.yahoo_configured() and not config.yahoo_authorized():
         checks.append({"name": "Yahoo rosters", "ok": False,
                        "detail": "credentials set, not authorized yet: run `python -m fbb auth` in a terminal"})
     else:
         checks.append({"name": "Yahoo rosters", "ok": False, "detail": "demo league: add Yahoo credentials to .env"})
-    if src in ("manual", "yahoo"):
+    if src == "yahoo":
         # a roster over the limit usually means an IL move the app hasn't been told about,
         # and it inflates every projection for that team
         with db.cursor() as c:
@@ -210,33 +197,8 @@ def readiness() -> list:
                 limit = db.kv_get("roster_size", 13)
                 if n > limit:
                     checks.append({"name": "Roster size", "ok": False,
-                                   "detail": f"your team has {n} active players, the league allows {limit}: set an IL slot "
-                                             f"or record the drop in League setup (projections are inflated until then)"})
-    if src == "manual":
-        from . import manual
-        info = manual.summary()
-        others = [t for t in info["teams"] if not t["is_mine"]]
-        stale = []
-        log_at = db.kv_get("yahoo_log_imported")   # a transaction-log import keeps every roster current
-        for t in info["teams"]:
-            seen = max([x for x in (t["updated"], log_at) if x], default=None)
-            if seen:
-                age_d = (now - datetime.fromisoformat(seen)).days
-                if age_d >= 7:
-                    stale.append(t["name"])
-        checks.append({"name": "Pasted rosters", "ok": len(others) >= info["num_teams"] - 1 and not stale,
-                       "detail": f"{len(others)} of {info['num_teams'] - 1} other teams pasted"
-                                 + (f"; not updated for a week (paste the transaction log): {', '.join(stale)}" if stale else "")
-                                 + ("" if info["opponent_key"] else "; no opponent picked")})
-        fa = db.kv_get("fa_list")
-        if not fa:
-            checks.append({"name": "Free-agent list", "ok": False,
-                           "detail": "not pasted: availability is inferred from rosters (Setup > Free agents)"})
-        else:
-            from . import free_agents
-            if free_agents.snapshot() is None:
-                checks.append({"name": "Free-agent list", "ok": False,
-                               "detail": "older than 3 days: re-paste it in Setup so pickups are current"})
+                                   "detail": f"your team has {n} active players, the league allows {limit}: "
+                                             f"move someone to IL or drop a player in Yahoo (projections are inflated until then)"})
     err = db.kv_get("claude_error")
     if err:
         checks.append({"name": "News extraction", "ok": False,

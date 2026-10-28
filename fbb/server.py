@@ -2,7 +2,6 @@
 import json
 import logging
 from contextlib import asynccontextmanager
-from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -150,15 +149,7 @@ def state():
         "opp_roster": [_player_row(ctx, p, dates) for p in opp],
         "league_table": db.kv_get("league_table", []),
         "calibration": db.kv_get("calibration"),
-        "manual": _manual_summary(),
     })
-
-
-def _manual_summary():
-    if db.kv_get("league_source") != "manual":
-        return None
-    from . import manual
-    return manual.summary()
 
 
 @app.get("/api/news")
@@ -250,43 +241,12 @@ class StatusIn(BaseModel):
 
 @app.post("/api/moves/{move_id}")
 def move_status(move_id: int, s: StatusIn):
-    if s.status not in ("executed", "dismissed", "suggested"):
+    """Dismiss a suggestion, or note a waiver claim you put in (it isn't in Yahoo's transaction
+    log until it clears). Moves you make are picked up from Yahoo by the next sync."""
+    if s.status not in ("claimed", "dismissed", "suggested"):
         raise HTTPException(400, "bad status")
-    applied = False
-    if s.status == "executed":
-        with db.cursor() as c:
-            cur = c.execute("SELECT status FROM moves WHERE id=?", (move_id,)).fetchone()
-        if cur and cur["status"] == "executed":
-            # a second click (the card stays up until the model re-runs) used to re-apply the
-            # move to a roster that already had it and fail with a bare 400
-            return {"ok": True, "roster_updated": False, "already": True}
-        # A waiver player can't be added yet: it's a claim. Changing the roster now made the app
-        # show a move that hadn't happened (Oct 2026: Bane in / White out before the claim ran).
-        from . import free_agents
-        with db.cursor() as c:
-            mv = c.execute("SELECT add_id FROM moves WHERE id=?", (move_id,)).fetchone()
-        av = free_agents.availability(mv["add_id"]) if mv else {}
-        if av.get("status") == "W":
-            learning.set_move_status(move_id, "claimed")
-            return {"ok": True, "roster_updated": False, "claimed": True, "until": av.get("until")}
-    if s.status == "executed" and db.kv_get("league_source") == "manual":
-        # manual mode has no Yahoo sync to notice the change: apply it to the pasted roster
-        from . import manual
-        ctx = pipeline.context()
-        with db.cursor() as c:
-            mv = c.execute("SELECT add_id, drop_id FROM moves WHERE id=?", (move_id,)).fetchone()
-        if mv and ctx.my_key:
-            from . import history
-            try:
-                history.record(ctx, "add/drop", [mv["add_id"]], [mv["drop_id"]], source="suggestion",
-                               move_id=move_id, apply=True)
-                applied = True
-            except ValueError as e:
-                raise HTTPException(400, str(e))
     learning.set_move_status(move_id, s.status)
-    if applied:
-        _manual_changed()
-    return {"ok": True, "roster_updated": applied}
+    return {"ok": True}
 
 
 @app.get("/api/moves/lookup")
@@ -330,118 +290,11 @@ def add_report(r: ReportIn):
     return news.ingest_report(r.text, r.source)
 
 
-# ---------------------------------------------------------------- manual league mode
-
-class ManualTeamIn(BaseModel):
-    name: str
-    text: str
-    mine: bool = False
-
-
-class ManualConfigIn(BaseModel):
-    num_teams: int = 10
-    active_slots: int = 10
-    roster_size: int = 13
-    point_weights: dict | None = None
-    categories: list | None = None
-
-
-class OpponentIn(BaseModel):
-    team_key: str | None
-
-
-def _manual_changed():
-    """Re-run the model on the new rosters (in the background: takes a few seconds)."""
+def _rerun():
+    """Re-run the model after a change (in the background: takes a few seconds)."""
     import threading
     pipeline.context(reload=True)
     threading.Thread(target=pipeline.refresh, daemon=True).start()
-
-
-@app.get("/api/manual")
-def manual_get():
-    from . import manual
-    return _json(manual.summary())
-
-
-@app.post("/api/manual/config")
-def manual_config(cfg: ManualConfigIn):
-    from . import manual
-    manual.configure(cfg.num_teams, cfg.active_slots, cfg.roster_size, cfg.point_weights, cfg.categories)
-    _manual_changed()
-    return _json(manual.summary())
-
-
-@app.post("/api/manual/team")
-def manual_team(t: ManualTeamIn):
-    from . import manual
-    if db.kv_get("league_source") != "manual":
-        raise HTTPException(400, "Save league settings first")
-    if not t.name.strip():
-        raise HTTPException(400, "Team name is required")
-    try:
-        res = manual.set_team(t.name.strip(), t.text, t.mine, pipeline.context())
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    _manual_changed()
-    return _json(res)
-
-
-@app.delete("/api/manual/team/{key}")
-def manual_delete(key: str):
-    from . import manual
-    manual.remove_team(key)
-    _manual_changed()
-    return {"ok": True}
-
-
-@app.post("/api/manual/opponent")
-def manual_opponent(o: OpponentIn):
-    from . import manual
-    manual.set_opponent(o.team_key)
-    _manual_changed()
-    return {"ok": True}
-
-
-
-class RosterEditIn(BaseModel):
-    team_key: str
-    add: int | None = None
-    drop: int | None = None
-    slot: str = "BN"
-
-
-class SlotIn(BaseModel):
-    team_key: str
-    nba_id: int
-    slot: str
-
-
-@app.get("/api/manual/roster/{key}")
-def manual_roster(key: str):
-    from . import manual
-    return _json({"team_key": key, "players": manual.roster(key), "slots": manual.SLOT_CHOICES})
-
-
-@app.post("/api/manual/roster")
-def manual_roster_edit(e: RosterEditIn):
-    from . import manual
-    try:
-        manual.edit_roster(e.team_key, e.add, e.drop, e.slot, pipeline.context())
-    except ValueError as err:
-        raise HTTPException(400, str(err))
-    _manual_changed()
-    return {"ok": True}
-
-
-@app.post("/api/manual/slot")
-def manual_slot(e: SlotIn):
-    from . import manual
-    try:
-        manual.set_slot(e.team_key, e.nba_id, e.slot)
-    except ValueError as err:
-        raise HTTPException(400, str(err))
-    _manual_changed()
-    return {"ok": True}
 
 
 # ---------------------------------------------------------------- watchlist
@@ -489,7 +342,6 @@ def watch_remove(wid: int):
     return {"ok": True}
 
 
-
 # ---------------------------------------------------------------- lineup optimizer
 
 @app.get("/api/lineup")
@@ -499,16 +351,6 @@ def lineup_get():
     if not ctx.my_key:
         return _json({"days": []})
     return _json(lineup.week_plan(ctx))
-
-
-@app.post("/api/lineup/apply")
-def lineup_apply():
-    from . import lineup
-    ctx = pipeline.context()
-    res = lineup.apply_today(ctx)
-    _manual_changed()
-    return _json(res)
-
 
 
 # ---------------------------------------------------------------- pickup check
@@ -527,57 +369,12 @@ def evaluate(e: EvalIn):
     return _json(recommend.evaluate_add(ctx, e.nba_id))
 
 
-
 # ---------------------------------------------------------------- transaction history
-
-class TxIn(BaseModel):
-    kind: str                 # add | drop | add/drop | trade
-    ins: list[int] = []
-    outs: list[int] = []
-    effective: str | None = None
-    other_key: str | None = None
-    note: str = ""
-
-
-class TxEdit(BaseModel):
-    effective: str | None = None
-    note: str | None = None
-
 
 @app.get("/api/history")
 def history_get():
     from . import history
     return _json(history.report(pipeline.context()))
-
-
-@app.post("/api/history")
-def history_add(t: TxIn):
-    from . import history
-    if t.kind not in ("add", "drop", "add/drop", "trade"):
-        raise HTTPException(400, "kind must be add, drop, add/drop or trade")
-    if t.kind == "trade" and not (t.ins and t.outs and t.other_key):
-        raise HTTPException(400, "A trade needs players both ways and the other team")
-    if not (t.ins or t.outs):
-        raise HTTPException(400, "Pick at least one player")
-    if t.effective and t.effective > date.today().isoformat():
-        raise HTTPException(400, "The date can't be in the future")
-    ctx = pipeline.context()
-    try:
-        tid = history.record(ctx, t.kind, t.ins, t.outs, t.effective, t.other_key, source="manual",
-                             note=t.note, apply=db.kv_get("league_source") == "manual")
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    history.evaluate(pipeline.context(reload=True))
-    _manual_changed()
-    return {"ok": True, "id": tid}
-
-
-@app.post("/api/history/{tid}")
-def history_edit(tid: int, e: TxEdit):
-    from . import history
-    history.update(tid, e.effective, e.note)
-    history.evaluate(pipeline.context())
-    return {"ok": True}
 
 
 @app.delete("/api/history/{tid}")
@@ -587,10 +384,7 @@ def history_delete(tid: int):
         res = history.delete(tid)
     except ValueError as e:
         raise HTTPException(404, str(e))
-    if res.get("roster_reverted"):
-        _manual_changed()
     return _json(dict(res, ok=True))
-
 
 
 # ---------------------------------------------------------------- your take
@@ -615,7 +409,7 @@ def take_set(t: TakeIn):
         res = overrides.set_take(pipeline.context(), t.nba_id, t.kind, t.value, t.note)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    _manual_changed()
+    _rerun()
     return _json(res)
 
 
@@ -623,9 +417,8 @@ def take_set(t: TakeIn):
 def take_clear(nba_id: int):
     from . import overrides
     overrides.clear(nba_id)
-    _manual_changed()
+    _rerun()
     return {"ok": True}
-
 
 
 # ---------------------------------------------------------------- phone alerts
@@ -664,7 +457,6 @@ def alerts_test():
     return {"ok": True}
 
 
-
 # ---------------------------------------------------------------- trade finder (runs in the background)
 
 _trade_job = {"running": False, "done": 0, "total": 0, "result": None, "error": None, "at": None}
@@ -695,71 +487,10 @@ def trades_status():
     return _json(_trade_job)
 
 
-
-# ---------------------------------------------------------------- Yahoo free-agent list
-
-class FaIn(BaseModel):
-    text: str
-    append: bool | None = None  # None: add to a list started in the last 30 min
-
-
-@app.get("/api/free-agents")
-def fa_get():
-    from . import free_agents
-    fa = db.kv_get("fa_list")
-    if not fa:
-        return {"pasted": False}
-    snap = free_agents.snapshot()
-    return {"pasted": True, "created": fa["created"], "fresh": snap is not None, "players": len(fa["players"]),
-            "on_waivers": sum(1 for p in fa["players"].values() if p["status"] == "W")}
-
-
-@app.post("/api/free-agents")
-def fa_import(f: FaIn):
-    from . import free_agents
-    try:
-        res = free_agents.import_list(f.text, append=f.append)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    _manual_changed()
-    return _json(res)
-
-
-
-class LimitIn(BaseModel):
-    max_adds_week: int | None = None
-
-
-@app.post("/api/add-limit")
-def add_limit(l: LimitIn):
-    db.kv_set("max_adds_week", l.max_adds_week if l.max_adds_week and l.max_adds_week > 0 else None)
-    _manual_changed()
-    return {"ok": True, "max_adds_week": db.kv_get("max_adds_week")}
-
-
 @app.get("/api/add-limit")
 def add_limit_get():
     from . import history
     return _json(history.add_budget(pipeline.context()))
-
-
-
-# ---------------------------------------------------------------- Yahoo transaction log
-
-class TxnIn(BaseModel):
-    text: str
-
-
-@app.post("/api/yahoo-log")
-def yahoo_log_import(t: TxnIn):
-    from . import yahoo_log
-    try:
-        res = yahoo_log.import_log(t.text)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    _manual_changed()
-    return _json(res)
-
 
 
 # ---------------------------------------------------------------- the model's own team

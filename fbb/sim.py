@@ -201,10 +201,10 @@ def estimate_wtd(ctx: Context, pids, team_key=None) -> dict:
 
     For each game day: a game counts only if the player was on the team when it tipped off
     (timestamped moves from the Yahoo log / History), and only if he started: the lineup
-    recorded that day if there is one (pasted, or "I set this in Yahoo"), otherwise the best
-    legal lineup by *projection* (not by actual points, which would be hindsight).
-    (Until Oct 2026 the current slots were applied to the whole week, so pressing the lineup
-    button on a light day benched everyone's earlier games.)"""
+    recorded that day if there is one (each Yahoo sync records the day's slots), otherwise the
+    best legal lineup by *projection* (not by actual points, which would be hindsight).
+    (Until Oct 2026 the current slots were applied to the whole week, so a light day's lineup
+    benched everyone's earlier games.)"""
     from . import lineup
     team_key = team_key or team_key_of(ctx, pids)
     moves = _team_moves(ctx, team_key)
@@ -662,7 +662,7 @@ def league_average_dist(ctx: Context):
         if dists:
             ctx._pools["_avg"] = model.avg_opponent_dist(dists)
         else:
-            # No other rosters known (manual mode, only your team pasted): a league-average
+            # No other rosters known (only your team): a league-average
             # team is approximated by dealing the top N x roster_size players into N teams.
             mine = set(ctx.rosters.get(ctx.my_key, []))
             pool = [p for p in ctx.values["var"].sort_values(ascending=False).index if p not in mine]

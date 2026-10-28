@@ -58,29 +58,6 @@ def set_move_status(move_id: int, status: str):
                   (status, db.now_iso() if status == "executed" else None, move_id))
 
 
-def record_roster_change(ctx, old: list, new: list):
-    """Called by the Yahoo sync when your roster changed. Matches the change to a suggestion
-    if there was one; otherwise logs it as your own ('manual') call so it gets scored too."""
-    from . import recommend, sim
-    adds = [p for p in new if p not in old]
-    drops = [p for p in old if p not in new]
-    dates = sim.remaining_dates(ctx)
-    with db.cursor() as c:
-        for a, d in zip(adds, drops):
-            row = c.execute("SELECT id FROM moves WHERE add_id=? AND drop_id=? AND status='suggested'",
-                            (a, d)).fetchone()
-            if row:
-                c.execute("UPDATE moves SET status='executed', executed_at=? WHERE id=?",
-                          (db.now_iso(), row["id"]))
-                continue
-            edge, raw = recommend.horizon_edge(ctx, a, d, dates, "upgrade")
-            c.execute("""INSERT OR IGNORE INTO moves(created, week, add_id, drop_id, confidence, raw_confidence,
-                         rationale, status, executed_at, kind, horizon_end) VALUES (?,?,?,?,?,?,?, 'manual', ?, ?, ?)""",
-                      (db.now_iso(), ctx.week, a, d, calibrate(raw), raw,
-                       json.dumps(["Your own move (detected from Yahoo)"]), db.now_iso(),
-                       "upgrade", horizon_end(ctx, "upgrade")))
-
-
 def evaluate_moves(logs: pd.DataFrame | None = None):
     """Score moves by realized value above replacement: added player vs dropped player,
     over the games after the move. Provisional at 7 days, final at 21."""
@@ -360,8 +337,8 @@ def report() -> dict:
 
 
 def resolve_from_box_scores(ctx) -> int:
-    """Manual mode has no Yahoo scoreboard: once a week is over, decide each logged matchup from
-    box scores (starters by pasted slot), so weekly forecasts still get graded."""
+    """Without a Yahoo scoreboard (demo league), once a week is over decide each logged matchup
+    from box scores (starters by recorded slot), so weekly forecasts still get graded."""
     from datetime import date
     from . import sim
     if db.kv_get("league_source") == "yahoo":

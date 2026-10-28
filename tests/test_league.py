@@ -28,18 +28,6 @@ def test_waived_or_retired_players_have_no_team(ctx, pid):
     assert any("isn't on an NBA roster" in w for w in e["warnings"])
 
 
-# ---------------------------------------------------------------- paste import
-
-def test_paste_parser_reads_all_players_slots_and_positions(league_db, paste_text):
-    from fbb import manual
-    players, _ = manual.parse_roster(paste_text)
-    assert len(players) == 13
-    slots = [s for _, s in players]
-    assert slots.count("BN") == 3 and slots.count("C") == 2 and slots.count("Util") == 2
-    assert len(manual.parse_roster.last_positions) == 13
-    assert manual.unmatched_candidates(paste_text, [p for p, _ in players]) == []
-
-
 # ---------------------------------------------------------------- simulator
 
 def test_simulation_is_reproducible(ctx):
@@ -88,54 +76,26 @@ def test_trade_rejects_players_you_dont_own(ctx, pid):
         recommend.evaluate_trade(ctx, [not_mine], [pid("Nikola Jokić")])
 
 
-def test_backdated_move_is_recorded_scored_and_editable(ctx, pid):
-    from fbb import history, pipeline
+def test_move_found_by_sync_is_recorded_and_scored(ctx, pid):
+    from fbb import db, history, pipeline
     mine = ctx.rosters[ctx.my_key]
     out = min(mine, key=lambda p: ctx.values["value"].get(p, 0))      # your weakest
     free = [p for p in ctx.values.sort_values("value", ascending=False).index   # best *healthy* free agent:
             if p not in ctx.rostered() and isinstance(ctx.team_of(p), str) and p not in ctx.injuries]  # an injured one
                                                                                 # (e.g. Butler, out to Feb) really is a loss now
-    tid = history.record(ctx, "add/drop", [free[0]], [out], effective="2026-10-21", apply=True)
+    with db.cursor() as c:  # the sync has already put the move on the roster
+        c.execute("DELETE FROM rosters WHERE team_key=? AND nba_id=?", (ctx.my_key, out))
+        c.execute("INSERT INTO rosters VALUES (?,?,?)", (ctx.my_key, free[0], "BN"))
     ctx = pipeline.context(reload=True)
-    assert free[0] in ctx.rosters[ctx.my_key] and out not in ctx.rosters[ctx.my_key]
+    tid = history.record(ctx, "add/drop", [free[0]], [out], effective="2026-10-21")
     item = next(i for i in history.report(ctx)["items"] if i["id"] == tid)
     # regression: the prediction must use the roster BEFORE the move (a clear upgrade can't be negative)
     assert item["prediction"]["per_game_diff"] > 0
     assert item["prediction"]["season_dwins"] > 0
     history.evaluate(ctx)
-    history.update(tid, effective="2026-10-22")
-    history.evaluate(ctx)
-    item = next(i for i in history.report(ctx)["items"] if i["id"] == tid)
-    assert item["effective"] == "2026-10-22"
     history.delete(tid)
     assert all(i["id"] != tid for i in history.report(ctx)["items"])
 
-
-def test_trade_moves_players_both_ways(ctx):
-    from fbb import history, pipeline
-    other = next(k for k in ctx.rosters if k != ctx.my_key)
-    give, get = ctx.rosters[ctx.my_key][0], ctx.rosters[other][0]
-    history.record(ctx, "trade", [get], [give], other_key=other, apply=True)
-    ctx = pipeline.context(reload=True)
-    assert get in ctx.rosters[ctx.my_key] and give in ctx.rosters[other]
-
-
-def test_trade_validation_blocks_wrong_team(ctx, pid):
-    from fbb import history
-    other = next(k for k in ctx.rosters if k != ctx.my_key)
-    elsewhere = next(p for k, ids in ctx.rosters.items() if k not in (ctx.my_key, other) for p in ids)
-    with pytest.raises(ValueError):
-        history.record(ctx, "trade", [elsewhere], [ctx.rosters[ctx.my_key][0]], other_key=other, apply=True)
-
-
-def test_editor_add_refuses_player_on_another_team(ctx):
-    from fbb import manual
-    owned = next(p for k, ids in ctx.rosters.items() if k != ctx.my_key for p in ids)
-    with pytest.raises(ValueError):
-        manual.edit_roster(ctx.my_key, add=owned, ctx=ctx)
-
-
-# ---------------------------------------------------------------- weeks
 
 def test_season_week_counts_from_first_game_week(league_db):
     from fbb import sim
@@ -251,35 +211,7 @@ def test_trade_finder_and_evaluator_agree(ctx):
         assert isinstance(ctx.team_of(p), str)
 
 
-# ---------------------------------------------------------------- Yahoo free-agent list
-
-def test_free_agent_paste_reads_status_waivers_and_positions(ctx, pid):
-    from datetime import date
-    from fbb import free_agents
-    from pathlib import Path
-    text = (Path(__file__).parent / "fixtures" / "yahoo_fa_paste.txt").read_text(encoding="utf-8")
-    players, unmatched = free_agents.parse(text, today=date(2026, 10, 22))
-    by = {p["nba_id"]: p for p in players}
-    assert by[pid("Bilal Coulibaly")]["status"] == "FA" and by[pid("Bilal Coulibaly")]["positions"] == "SG,SF"
-    assert by[pid("Santi Aldama")]["status"] == "W" and by[pid("Santi Aldama")]["until"] == "2026-10-24"
-    assert by[pid("Precious Achiuwa")]["status"] == "FA"
-    assert unmatched == ["Notarealplayer Fakename"]
-
-
-def test_free_agent_list_cleans_outdated_rosters_and_flags_waivers(ctx, pid):
-    from datetime import date
-    from fbb import free_agents, db
-    db.kv_set("yahoo_waivers", None)  # the paste is the fallback when the sync has no waiver list
-    other = next(k for k in ctx.rosters if k != ctx.my_key)
-    victim = ctx.rosters[other][0]
-    text = f"{ctx.name(victim)}\n{ctx.name(victim)}Player Note XXX - PG\nFA\nSanti Aldama\nSanti AldamaPlayer Note DAL - PF,C\nW (Dec 31)\n"
-    res = free_agents.import_list(text, append=False)
-    assert any(ctx.name(victim) in x for x in res["removed_from_outdated_rosters"])
-    with db.cursor() as c:
-        assert c.execute("SELECT 1 FROM rosters WHERE team_key=? AND nba_id=?", (other, victim)).fetchone() is None
-    assert free_agents.availability(pid("Santi Aldama"))["status"] == "W"
-    assert free_agents.availability(pid("Nikola Jokić"))["listed"] is False
-
+# ---------------------------------------------------------------- Yahoo waivers and moves
 
 def test_move_made_in_yahoo_is_matched_to_its_suggestion(ctx, pid):
     from fbb import db, yahoo
@@ -297,11 +229,9 @@ def test_yahoo_waiver_list_confirms_everyone_else_is_a_free_agent(ctx, pid):
     db.kv_set("league_source", "yahoo")
     free_agents.set_yahoo_waivers([{"nba_id": pid("Santi Aldama"), "status": "W", "until": "2099-01-01",
                                     "positions": "PF,C"}])
-    assert free_agents.availability(pid("Santi Aldama")) == {"known": True, "listed": True, "status": "W",
-                                                             "until": "2099-01-01"}
-    # not on the waiver list: a confirmed free agent, not "beyond the pages you pasted"
-    assert free_agents.availability(pid("Nikola Jokić"))["status"] == "FA"
-    assert free_agents.availability(pid("Nikola Jokić"))["listed"] is True
+    assert free_agents.availability(pid("Santi Aldama")) == {"known": True, "status": "W", "until": "2099-01-01"}
+    # not on the waiver list: a confirmed free agent
+    assert free_agents.availability(pid("Nikola Jokić")) == {"known": True, "status": "FA", "until": None}
 
 
 # ---------------------------------------------------------------- weekly add limit & locks
@@ -339,52 +269,6 @@ def test_locked_players_keep_their_slot(ctx):
             assert b["nba_id"] not in started                        # locked bench can't come in
 
 
-def test_free_agent_pages_pasted_together_build_one_list(ctx, pid):
-    from fbb import free_agents
-    page = lambda name, team, pos: f"{name}\n{name}Player Note {team} - {pos}\nFA\n"
-    free_agents.import_list(page("Santi Aldama", "DAL", "PF,C"), append=False)
-    r = free_agents.import_list(page("Precious Achiuwa", "SAC", "PF,C"))   # default: auto
-    assert r["appended"] and r["players"] == 2
-    r = free_agents.import_list(page("Bilal Coulibaly", "WAS", "SG,SF"), append=False)
-    assert r["players"] == 1
-
-
-
-# ---------------------------------------------------------------- Yahoo transaction log
-
-def test_transaction_log_parses_blocks_and_cut_off_team(ctx, pid):
-    from datetime import date
-    from pathlib import Path
-    from fbb import yahoo_log
-    text = (Path(__file__).parent / "fixtures" / "yahoo_txn_paste.txt").read_text(encoding="utf-8")
-    txns, odd = yahoo_log.parse(text, today=date(2026, 10, 22))
-    assert len(txns) == 8 and odd == []
-    first = txns[0]                                   # oldest: its team line was cut off
-    assert first["team"] is None and [a["pid"] for a in first["adds"]] == [pid("Andre Drummond")]
-    mine = next(t for t in txns if t["team"] == "Sheldon's Superb Team")
-    assert [a["pid"] for a in mine["adds"]] == [pid("Jared McCain")] and [d["pid"] for d in mine["drops"]] == [pid("Jalen Suggs")]
-    nurk = next(t for t in txns if t["team"] == "Only PGs")   # trailing injury badge "O"
-    assert [a["pid"] for a in nurk["adds"]] == [pid("Jusuf Nurkić")]
-    assert nurk["when"].utcoffset().total_seconds() == -4 * 3600   # Yahoo times are US Eastern
-
-
-def test_transaction_log_applies_once_and_only_newer_moves(league_db):
-    """Self-contained (the live league keeps changing): moves older than every team's roster
-    paste are never applied, and a second import of the same log applies nothing."""
-    from datetime import date
-    from pathlib import Path
-    from fbb import yahoo_log, db
-    text = (Path(__file__).parent / "fixtures" / "yahoo_txn_paste.txt").read_text(encoding="utf-8")
-    keys = [k for (k,) in db.cursor().__enter__().execute("SELECT team_key FROM fantasy_teams").fetchall()]
-    db.kv_set("yahoo_txn_seen", [])
-    db.kv_set("manual_updated", {k: "2026-10-24T00:00:00+00:00" for k in keys})   # all pastes newer
-    r = yahoo_log.import_log(text, today=date(2026, 10, 22))
-    assert r["applied"] == []
-    again = yahoo_log.import_log(text, today=date(2026, 10, 22))
-    assert again["applied"] == [] and again["your_moves_logged"] == []
-    assert again["already_seen"] >= len(r["already_reflected"])
-
-
 # ---------------------------------------------------------------- week-to-date scoring
 
 def test_was_on_roster_at_tipoff():
@@ -411,12 +295,12 @@ def test_week_to_date_uses_that_days_lineup_not_todays(ctx):
         import pytest
         pytest.skip("no games played yet this week")
     assert wtd["pts"] > 0
-    # a lineup recorded for a past day is honoured: all bench that day -> nothing counts that day
-    d = str(played["game_date"].iloc[0])[:10]
-    db.snapshot_lineup(me, d)
+    # a lineup recorded for a past day is honoured: all bench every day -> nothing counts.
+    # (Subtracting a day's points instead overcounts: only that day's starters were ever in wtd.)
+    for d in played["game_date"].astype(str).str[:10].unique():
+        db.snapshot_lineup(me, d)
     ctx._pools.clear()
-    day_pts = played[played["game_date"].astype(str).str[:10] == d]["pts"].sum()
-    assert sim.estimate_wtd(ctx, ctx.rosters[me], me)["pts"] <= wtd["pts"] - day_pts + 1e-6
+    assert sim.estimate_wtd(ctx, ctx.rosters[me], me)["pts"] == 0
 
 
 # ---------------------------------------------------------------- unfinished games / model team
@@ -469,20 +353,20 @@ def test_absence_so_far_sets_a_floor_on_remaining_absence():
     assert three == [0.0, 0.0, 0.0]                # missed 3 already: expect 3 more
 
 
-def test_deleting_a_history_entry_reverts_the_roster(ctx, monkeypatch):
+def test_deleting_a_history_entry_reopens_its_suggestion(ctx):
     from fbb import history, db, recommend
-    me = ctx.rosters[ctx.my_key]
-    drop = me[-1]
+    drop = ctx.rosters[ctx.my_key][-1]
     add = next(p for p in recommend.best_free_agents(ctx, 10))
-    tid = history.record(ctx, "add/drop", [add], [drop], apply=True)
     with db.cursor() as c:
-        assert c.execute("SELECT 1 FROM rosters WHERE team_key=? AND nba_id=?", (ctx.my_key, add)).fetchone()
-    res = history.delete(tid)
-    assert res["roster_reverted"]
+        mid = c.execute("INSERT INTO moves(created, week, add_id, drop_id, status, kind) VALUES (?,?,?,?,?,?)",
+                        (db.now_iso(), 1, add, drop, "executed", "upgrade")).lastrowid
+    tid = history.record(ctx, "add/drop", [add], [drop], source="suggestion", move_id=mid)
+    history.delete(tid)
     with db.cursor() as c:
-        assert c.execute("SELECT 1 FROM rosters WHERE team_key=? AND nba_id=?", (ctx.my_key, add)).fetchone() is None
-        assert c.execute("SELECT 1 FROM rosters WHERE team_key=? AND nba_id=?", (ctx.my_key, drop)).fetchone()
-        assert c.execute("SELECT count(*) FROM league_moves WHERE nba_id IN (?,?) AND source='manual'", (add, drop)).fetchone()[0] == 0
+        assert c.execute("SELECT status FROM moves WHERE id=?", (mid,)).fetchone()[0] == "suggested"
+        assert c.execute("SELECT deleted FROM transactions WHERE id=?", (tid,)).fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM league_moves WHERE nba_id IN (?,?) AND source='suggestion'",
+                         (add, drop)).fetchone()[0] == 0
 
 
 def test_il_players_are_never_suggested_drops_and_open_spots_are_found(ctx, monkeypatch):

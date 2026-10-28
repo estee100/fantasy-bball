@@ -176,49 +176,24 @@ def sync_rosters(q) -> dict:
             slot = _s(_get(p, "selected_position", "position"))
             rosters[key].append((pid, slot))
             # yfpy's eligible_positions keeps only the first position (yfpy 17: Mitchell ['PG']);
-            # display_position is Yahoo's full base-position list, "PG,SG", same as a paste
+            # display_position is Yahoo's full base-position list, "PG,SG"
             positions = _s(_get(p, "display_position")) or ",".join(
                 _s(x) for x in (_get(p, "eligible_positions") or []))
             with db.cursor() as c:
                 c.execute("UPDATE players SET yahoo_key=?, positions=?, yahoo_status=? WHERE nba_id=?",
                           (_s(_get(p, "player_key")), positions, _s(_get(p, "status")), pid))
     with db.cursor() as c:
-        old = {r["team_key"]: r["name"] for r in c.execute("SELECT team_key, name FROM fantasy_teams")
-               if r["team_key"] not in rosters}
-        names = {r["name"].strip().lower(): r["team_key"] for r in c.execute(
-            "SELECT team_key, name FROM fantasy_teams") if r["team_key"] in rosters}
-    if rosters and old:
-        # a pasted league's History, predictions and lineups carry its own team keys: move them
-        # onto the Yahoo team of the same name before those teams go
-        rekey_teams({k: names[n.strip().lower()] for k, n in old.items() if n.strip().lower() in names})
-    with db.cursor() as c:
-        # teams from an earlier demo or pasted league would otherwise linger (one still flagged mine)
+        # teams from the demo league would otherwise linger (one still flagged mine)
         if rosters:  # an empty answer from Yahoo must not wipe the league
             c.execute(f"DELETE FROM fantasy_teams WHERE team_key NOT IN ({','.join('?' * len(rosters))})",
                       list(rosters))
         c.execute("DELETE FROM rosters")
         for key, plist in rosters.items():
             c.executemany("INSERT OR REPLACE INTO rosters VALUES (?,?,?)", [(key, pid, s) for pid, s in plist])
+    for key in rosters:  # today's slots as each team's lineup today, for week-to-date estimates
+        db.snapshot_lineup(key, today)
     db.kv_set("unmatched_players", unmatched)
     return {"my_key": my_key, "rosters": {k: [p for p, _ in v] for k, v in rosters.items()}}
-
-
-TEAM_KEY_COLUMNS = [("transactions", "team_key"), ("transactions", "other_key"),
-                    ("matchup_predictions", "team_key"), ("matchup_predictions", "opp_key"),
-                    ("lineup_days", "team_key"), ("league_moves", "team_key"), ("shadow_days", "opp_key")]
-
-
-def rekey_teams(mapping: dict) -> None:
-    """Re-point every stored team key in mapping (old -> new). Rows that would collide with
-    one already under the new key are the same record twice; the new key's copy is kept."""
-    from . import history, shadow
-    history._ensure()
-    shadow._ensure()
-    with db.cursor() as c:
-        for old, new in mapping.items():
-            for table, col in TEAM_KEY_COLUMNS:
-                c.execute(f"UPDATE OR IGNORE {table} SET {col}=? WHERE {col}=?", (new, old))
-                c.execute(f"DELETE FROM {table} WHERE {col}=?", (old,))
 
 
 def sync_matchups(q, my_key, week) -> None:
@@ -299,7 +274,7 @@ def parse_waivers(raw) -> list:
 
 def sync_waivers(q, league_key) -> None:
     """Who's on waivers and until when. Everyone else not on a roster is a free agent, which the
-    synced rosters already tell us, so this is the one thing the pasted free-agent list added."""
+    synced rosters already tell us."""
     from . import free_agents
     idx, found, start = _player_index(), [], 0
     while True:
@@ -386,7 +361,7 @@ def sync_transactions(q, league_key, my_key) -> None:
         known.add(t["key"])
     if first and new:
         # The first read walks the whole season, so Yahoo's times now cover every move: the
-        # approximate ones (roster editor, paste minutes, roster comparisons) are superseded.
+        # approximate ones (roster comparisons, entries from before the sync) are superseded.
         with db.cursor() as c:
             c.execute("DELETE FROM league_moves WHERE source<>'yahoo-api'")
     if mine:
@@ -408,8 +383,8 @@ def _log_my_transaction(ctx, my_key, t, ins, outs, other):
     with db.cursor() as c:
         if c.execute("SELECT 1 FROM transactions WHERE yahoo_key=?", (t["key"],)).fetchone():
             return
-        # Already in History (roster editor, a paste, a suggestion marked done, or an earlier
-        # sync's roster comparison): link it to Yahoo's record and take Yahoo's date and times.
+        # Already in History from a sync whose transaction log failed (found by comparing
+        # rosters): link it to Yahoo's record and take Yahoo's date and times.
         for r in c.execute("SELECT id, players_in, players_out, source, effective FROM transactions"
                            " WHERE deleted=0 AND yahoo_key IS NULL AND effective BETWEEN ? AND ?",
                            ((eff - timedelta(days=3)).isoformat(), (eff + timedelta(days=3)).isoformat())).fetchall():
@@ -565,28 +540,3 @@ def sync() -> dict:
         log.warning("waiver list unavailable: %s", e)
     db.kv_set("yahoo_synced", db.now_iso())
     return dict(info, my_key=r["my_key"], unmatched=db.kv_get("unmatched_players", []))
-
-
-
-def probe() -> bool:
-    """Is the Fantasy API answering yet? Records it and alerts once when it starts working."""
-    last = db.kv_get("yahoo_probe_at")
-    if last and (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() < 3600:
-        return False  # hourly is plenty
-    db.kv_set("yahoo_probe_at", db.now_iso())
-    try:
-        q = query()
-        q.get_league_metadata()
-    except ValueError as e:
-        # Yahoo's token endpoint sometimes answers with a non-JSON page: not live, try later
-        log.warning("yahoo probe: unreadable response (%s)", e)
-        return False
-    except Exception as e:
-        if "not authorized" in str(e):
-            return False
-        raise
-    db.kv_set("yahoo_access_live", db.now_iso())
-    from . import alerts
-    alerts.send("Yahoo API access is on", "The fantasy app can now read your league. Tell Claude so it can verify the sync and switch over.",
-                tags="tada", priority=4)
-    return True

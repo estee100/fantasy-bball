@@ -109,18 +109,16 @@ def describe(ctx, B, m, with_urgency=True) -> dict:
     m["availability"] = av
     if av["status"] == "W":
         m["rationale"].insert(0, f"On waivers until {av['until']}: this is a waiver claim, not an instant add")
-    elif av["known"] and not av["listed"]:
-        m["rationale"].append("Beyond the Yahoo pages you pasted, so his waiver status is unknown: check if he's FA or W")
     if with_urgency:
         m.update(urgency(ctx, m, B["mine"], B["opp"], dates, B["b"], B["wtd_me"], B["n_sims"], B["seed"]))
     return m
 
 
-IL_SLOTS = 2   # without a Yahoo sync: Oct 2026 pastes show a team with 2 players on IL
+IL_SLOTS = 2   # without a Yahoo sync (demo league)
 
 
 def il_slots() -> int:
-    """The league's IL slots from the Yahoo sync (Gordon's League has 3), else the paste guess."""
+    """The league's IL slots from the Yahoo sync (Gordon's League has 3)."""
     return db.kv_get("il_slots") or IL_SLOTS
 
 # IL is for absences long enough to be worth an add now and a drop when he's back (~a week).
@@ -165,7 +163,7 @@ def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11, log=True, budget=No
     week_games = {p: sum(av for _, av in sim.player_games(ctx, p, dates)) for p in free}
     by_ros = sorted(free, key=lambda p: -ros_value(ctx, p))[:SCREEN_BY_ROS]
     by_week = sorted(free, key=lambda p: -week_games[p] * max(ctx.values["value"].get(p, 0), 0))[:SCREEN_BY_WEEK]
-    # players on your pasted Yahoo free-agent list are always considered (they're confirmed)
+    # players on Yahoo's waiver list are always considered: a claim may be the only way to get them
     from . import free_agents
     listed = [p for p in free_agents.listed_ids() if p in ctx.proj.index and p not in rostered
               and isinstance(ctx.team_of(p), str) and in_rotation(ctx, p)]
@@ -243,8 +241,6 @@ def evaluate_add(ctx, pid, n_sims=3000, seed=11) -> dict:
     out["availability"] = av
     if not owner and av["status"] == "W":
         out["warnings"].append(f"On waivers until {av['until']}: a waiver claim, not an instant add.")
-    elif not owner and av["known"] and not av["listed"]:
-        out["warnings"].append("Beyond the Yahoo pages you pasted: waiver status unknown (FA or W). Check in Yahoo.")
     if out["injury"]:
         g = model._games_out(pid, ctx.injuries, ctx.events)
         out["warnings"].append(f"Injury: {out['injury']['status']}" + (f", ~{g:.0f} games out" if g else "")

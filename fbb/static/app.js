@@ -48,14 +48,8 @@ document.addEventListener("DOMContentLoaded", () => {
     $("#ready-btn").setAttribute("aria-expanded", String(!pop.classList.contains("hidden")));
   });
   $("#report-btn").addEventListener("click", submitReport);
-  $("#team-btn").addEventListener("click", importTeam);
-  $("#fa-btn").addEventListener("click", () => importFa(null));
-  $("#txn-btn").addEventListener("click", importTxns);
-  $("#fa-add").addEventListener("click", () => importFa(false));
   initWatchPicker();
   initCheckPicker();
-  initHistoryForm();
-  $("#edit-team").addEventListener("change", () => loadEditor($("#edit-team").value));
   initTrade();
   initTips();
   load();
@@ -117,7 +111,6 @@ async function refreshNow() {
 }
 
 function renderAll() {
-  renderBanner();
   renderHeader();
   renderKPIs();
   renderCats();
@@ -175,7 +168,7 @@ function renderKPIs() {
       tiles.push(kpi("Expected categories won", `${fmt(exp, 1)} <small>of ${L.categories.length}</small>`,
         toss.length ? `Toss-ups: ${esc(toss.join(", "))}` : "No toss-up categories", exp / L.categories.length));
     }
-  } else tiles.push(kpi("Win probability this week", "–", S.manual ? "pick this week's opponent in Setup" : "run a refresh", null));
+  } else tiles.push(kpi("Win probability this week", "–", "run a refresh", null));
   if (rec?.base) {
     const table = S.league_table || [];
     const rank = table.findIndex((t) => t.is_mine) + 1;
@@ -211,9 +204,7 @@ function renderCats() {
     : `<span><i style="background:var(--div-pos)"></i>Favours you</span><span><i style="background:var(--div-neg)"></i>Favours opponent</span>`;
   if (!m) {
     $("#cat-sub").textContent = "";
-    el.innerHTML = S.manual
-      ? `<div class="empty">Pick this week's opponent in <a href="#setup" onclick="showTab('setup');return false">Setup</a> to see matchup odds.</div>`
-      : `<div class="empty">No matchup yet.</div>`;
+    el.innerHTML = `<div class="empty">No matchup yet.</div>`;
     return;
   }
   if (points && m.points) { renderPointsBreakdown(m.points, el); return; }
@@ -297,7 +288,7 @@ function renderMoves() {
         <span class="conf" data-tip="Chance the added player actually outproduces the dropped one over the move's horizon${S.calibration?.n ? ", calibrated on " + S.calibration.n + " scored moves" : " (uncalibrated until moves are scored)"}">
           Confidence <span class="meter"><span style="width:${m.confidence * 100}%"></span></span><b class="num">${pct(m.confidence)}</b></span>
         <span style="margin-left:auto"></span>
-        <button class="btn" data-act="executed" data-i="${i}">${ICON.check.replace("<svg", '<svg style="width:14px;height:14px"')} ${m.availability?.status === "W" ? "I put in this claim" : "I made this move"}</button>
+        ${m.availability?.status === "W" ? `<button class="btn" data-act="claimed" data-i="${i}">${ICON.check.replace("<svg", '<svg style="width:14px;height:14px"')} I put in this claim</button>` : ""}
         <button class="btn ghost" data-act="dismissed" data-i="${i}">Dismiss</button>
         <button class="btn ghost" data-watch="${m.add}" data-vs="${m.drop}" title="Track how he does vs ${esc(m.drop_name)} without making the move">☆ Watch</button>
       </div>
@@ -307,12 +298,9 @@ function renderMoves() {
     const found = await api(`/api/moves/lookup?add=${m.add}&drop=${m.drop}`);
     if (!found.id) { b.textContent = "Not in ledger yet (only top 3 are logged)"; return; }
     const res = await api(`/api/moves/${found.id}`, { method: "POST", body: JSON.stringify({ status: b.dataset.act }) }).catch((e) => ({ error: e.message }));
-    b.closest(".actions").innerHTML = `<span class="small muted">${res.error ? "Couldn't apply: " + esc(res.error)
-      : res.claimed ? `Claim noted. Your roster isn't changed yet: once it clears${res.until ? " (" + esc(shortDate(res.until)) + ")" : ""}, paste the transaction log and it's applied and logged.`
-      : res.already ? "Already logged as made: this card is from before the model re-ran."
-      : b.dataset.act === "executed" ? (res.roster_updated ? "Roster updated and logged; it'll be scored against real box scores. Re-running the model…" : "Logged as made: it'll be scored against real box scores.")
+    b.closest(".actions").innerHTML = `<span class="small muted">${res.error ? "Couldn't save: " + esc(res.error)
+      : b.dataset.act === "claimed" ? `Claim noted. Once it clears${m.availability?.until ? " (" + esc(shortDate(m.availability.until)) + ")" : ""}, the next sync picks it up from Yahoo and logs it as this suggestion.`
       : "Dismissed: still scored as a counterfactual, so the model learns either way."}</span>`;
-    if (res.roster_updated) afterManualChange();
   }));
   $$("#moves [data-watch]").forEach((b) => b.addEventListener("click", async () => {
     await watchPlayer(+b.dataset.watch, +b.dataset.vs);
@@ -752,93 +740,12 @@ function initTips() {
   });
 }
 
-/* ------------------------------------------------------------------ manual league setup */
-function renderBanner() {
-  const b = $("#rosters-banner");
-  const M = S.manual;
-  if (!M) { b.classList.add("hidden"); return; }
-  const others = M.teams.filter((t) => !t.is_mine).length;
-  const needed = M.num_teams - 1;
-  const mine = M.teams.some((t) => t.is_mine);
-  let msg = "";
-  if (!mine) msg = "Paste your own team in League setup to get started.";
-  else if (others < needed) msg = `Only ${others} of ${needed} other teams pasted: recommended pickups may already be on someone's roster, and the league-average comparison is approximate. Paste the rest in League setup.`;
-  else if (!M.opponent_key) msg = "Pick this week's opponent in League setup to see matchup odds.";
-  b.classList.toggle("hidden", !msg);
-  b.innerHTML = msg ? `${ICON.warn.replace("<svg", '<svg style="width:16px;height:16px;color:var(--warning)"')}<span>${esc(msg)}</span>
-    <button class="btn" style="margin-left:auto" onclick="showTab('setup')">Setup</button>` : "";
-}
-
-let setupData = null;
+/* ------------------------------------------------------------------ setup */
 async function loadSetup() {
-  setupData = await api("/api/manual");
-  renderSetup();
-  api("/api/add-limit").then((b) => { if (b.limit) $("#cfg-adds").value = b.limit; });
-  renderFaStatus(await api("/api/free-agents"));
   renderAlertSettings(await api("/api/alerts"));
 }
 
-function renderSetup() {
-  const M = setupData;
-  const pw = M.point_weights || {};
-  const W = [["pts", "Points"], ["reb", "Total rebounds"], ["ast", "Assists"], ["stl", "Steals"], ["blk", "Blocked shots"], ["tov", "Turnovers"]];
-  $("#settings-form").innerHTML = `
-    <div class="setting-sep">Points per stat</div>
-    ${W.map(([k, l]) => `<div class="setting-row"><span>${l}</span><input data-w="${k}" type="number" step="0.1" value="${pw[k] ?? ""}"></div>`).join("")}
-    <div class="setting-sep">Roster</div>
-    <div class="setting-row"><span>Teams in league</span><input id="cfg-teams" type="number" value="${M.num_teams}"></div>
-    <div class="setting-row"><span>Starting slots</span><input id="cfg-active" type="number" value="${M.active_slots}"></div>
-    <div class="setting-row"><span>Roster size (excl. IL)</span><input id="cfg-size" type="number" value="${M.roster_size}"></div>
-    <div class="setting-row"><span>Max adds per week <span class="muted small">(blank = no limit)</span></span><input id="cfg-adds" type="number" min="0" placeholder="none"></div>
-    <div style="margin-top:10px;display:flex;gap:8px;align-items:center"><button class="btn" id="cfg-save">Save settings</button><span class="small muted" id="cfg-status"></span></div>`;
-  $("#cfg-save").addEventListener("click", async () => {
-    const weights = {};
-    $$("#settings-form [data-w]").forEach((i) => { if (i.value !== "") weights[i.dataset.w] = +i.value; });
-    setupData = await api("/api/manual/config", { method: "POST", body: JSON.stringify({
-      num_teams: +$("#cfg-teams").value, active_slots: +$("#cfg-active").value, roster_size: +$("#cfg-size").value, point_weights: weights }) });
-    await api("/api/add-limit", { method: "POST", body: JSON.stringify({ max_adds_week: $("#cfg-adds").value === "" ? null : +$("#cfg-adds").value }) });
-    $("#cfg-status").textContent = "Saved. Re-running the model…";
-    afterManualChange();
-  });
-  const T = M.teams;
-  $("#teams-table").innerHTML = T.length ? `<thead><tr><th>Team</th><th class="r">Players</th><th>Updated</th><th>Opponent this week</th><th></th></tr></thead><tbody>
-    ${T.map((t) => `<tr><td><span class="pname">${esc(t.name)}</span>${t.is_mine ? ' <span class="chip mine">You</span>' : ""}</td>
-      <td class="r num">${t.players}</td><td class="small ${t.updated && (Date.now() - new Date(t.updated)) > 7 * 864e5 ? "delta-down" : "muted"}">${esc(ago(t.updated))}</td>
-      <td>${t.is_mine ? "" : `<label class="small" style="display:flex;gap:6px;align-items:center"><input type="radio" name="opp" value="${esc(t.team_key)}" ${M.opponent_key === t.team_key ? "checked" : ""}> this week</label>`}</td>
-      <td class="r"><button class="btn ghost small" data-del="${esc(t.team_key)}">Remove</button></td></tr>`).join("")}</tbody>`
-    : `<tr><td class="empty">No teams yet. Start with yours.</td></tr>`;
-  $$("#teams-table input[name=opp]").forEach((r) => r.addEventListener("change", async () => {
-    await api("/api/manual/opponent", { method: "POST", body: JSON.stringify({ team_key: r.value }) });
-    afterManualChange();
-  }));
-  $$("#teams-table [data-del]").forEach((b) => b.addEventListener("click", async () => {
-    if (!confirm("Remove this team?")) return;
-    await fetch(`/api/manual/team/${encodeURIComponent(b.dataset.del)}`, { method: "DELETE" });
-    loadSetup(); afterManualChange();
-  }));
-  if (!T.some((t) => t.is_mine)) $("#team-mine").checked = true;
-  const sel = $("#edit-team"), current = sel.value;
-  sel.innerHTML = T.map((t) => `<option value="${esc(t.team_key)}">${esc(t.name)}${t.is_mine ? " (you)" : ""}</option>`).join("");
-  sel.value = T.some((t) => t.team_key === current) ? current : (T.find((t) => t.is_mine)?.team_key || T[0]?.team_key || "");
-  loadEditor(sel.value);
-}
-
-async function importTeam() {
-  const name = $("#team-name").value.trim(), text = $("#team-text").value;
-  const st = $("#team-status");
-  if (!name) { st.textContent = "Enter the team's name."; return; }
-  if (text.length < 20) { st.textContent = "Paste the team page first."; return; }
-  st.textContent = "Importing…";
-  const r = await fetch("/api/manual/team", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, text, mine: $("#team-mine").checked }) });
-  const d = await r.json();
-  if (!r.ok) { st.textContent = d.detail || "Import failed"; return; }
-  st.innerHTML = `Imported ${d.players} players.${d.unmatched?.length ? ` <span class="delta-down">Couldn't match: ${esc(d.unmatched.join(", "))}</span>` : ""}`;
-  $("#team-name").value = ""; $("#team-text").value = ""; $("#team-mine").checked = false;
-  loadSetup(); afterManualChange();
-}
-
-async function afterManualChange() {
+async function awaitRefresh() {
   // the server re-runs the model in the background; pick up the result when it lands
   const before = S?.last_refresh;
   for (let i = 0; i < 40; i++) {
@@ -949,79 +856,6 @@ async function loadWatch() {
   bindPlayerLinks(el);
 }
 
-/* ------------------------------------------------------------------ roster editor (manual mode) */
-async function loadEditor(key) {
-  const el = $("#roster-editor");
-  if (!key) { el.innerHTML = `<div class="empty">No teams yet.</div>`; return; }
-  const d = await api(`/api/manual/roster/${encodeURIComponent(key)}`);
-  el.innerHTML = `<div class="picker" id="editor-add" style="margin-bottom:10px"></div>
-    ${d.players.map((p) => `<div class="editor-row">
-      <select data-slot="${p.nba_id}">${d.slots.map((s) => `<option ${s === p.slot ? "selected" : ""}>${s}</option>`).join("")}</select>
-      <span><a href="#" class="pname" data-pid="${p.nba_id}">${esc(p.name)}</a> <span class="pteam">${esc(p.team || "no NBA team")}</span></span>
-      <button class="btn ghost small" data-drop="${p.nba_id}">Drop</button></div>`).join("")}
-    <div class="small muted" style="margin-top:8px">${d.players.length} players. On your team, a drop followed by an add is logged as one move and scored like any other.</div>`;
-  const pk = $("#editor-add");
-  pk.innerHTML = `<input placeholder="Add a player to this team…"><div class="opts card hidden"></div>`;
-  const input = $("input", pk), opts = $(".opts", pk);
-  let t;
-  input.addEventListener("input", () => {
-    clearTimeout(t);
-    t = setTimeout(async () => {
-      if (input.value.trim().length < 2) { opts.classList.add("hidden"); return; }
-      const hits = await api(`/api/players/search?q=${encodeURIComponent(input.value.trim())}`);
-      opts.innerHTML = hits.map((h) => `<div class="opt" data-id="${h.nba_id}"><span><b>${esc(h.name)}</b> <span class="pteam">${esc(h.team || "")}</span></span><span class="muted small">${esc(h.owner)}</span></div>`).join("");
-      opts.classList.remove("hidden");
-      $$(".opt[data-id]", opts).forEach((o) => o.addEventListener("click", () => editRoster(key, { add: +o.dataset.id })));
-    }, 200);
-  });
-  input.addEventListener("blur", () => setTimeout(() => opts.classList.add("hidden"), 200));
-  // Drop: inline choices on the row (no browser pop-ups: they're easy to dismiss by accident
-  // and Chrome can silently block repeated ones). On your team you can also hold the drop
-  // and pair it with your next add, so the swap is scored as one move.
-  const mineTeam = setupData?.teams.find((t) => t.team_key === key)?.is_mine;
-  if (pendingDrop && pendingDrop.key === key) {
-    const pd = d.players.find((p) => p.nba_id === pendingDrop.pid);
-    pk.insertAdjacentHTML("beforebegin", `<div class="note" style="border-left:3px solid var(--warning);margin-bottom:8px">
-      <b>${esc(pd ? pd.name : "Player")}</b> will be dropped when you add someone below (logged as one swap).
-      <button class="btn ghost small" id="pending-now">Drop him now instead</button> <button class="btn ghost small" id="pending-cancel">Cancel</button></div>`);
-    $("#pending-now").addEventListener("click", () => { const pid = pendingDrop.pid; pendingDrop = null; editRoster(key, { drop: pid }); });
-    $("#pending-cancel").addEventListener("click", () => { pendingDrop = null; loadEditor(key); });
-  }
-  $$("[data-drop]", el).forEach((b) => b.addEventListener("click", () => {
-    const pid = +b.dataset.drop;
-    const cell = b.parentElement;
-    b.outerHTML = `<span style="display:inline-flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
-      <button class="btn small" data-act="now" style="color:var(--critical)">Drop now</button>
-      ${mineTeam ? '<button class="btn ghost small" data-act="pair" title="Hold the drop until you add someone: logged as one swap">Drop with my next add</button>' : ""}
-      <button class="btn ghost small" data-act="cancel">Cancel</button></span>`;
-    $("[data-act=now]", cell).addEventListener("click", () => editRoster(key, { drop: pid }));
-    const pair = $("[data-act=pair]", cell);
-    if (pair) pair.addEventListener("click", () => { pendingDrop = { key, pid }; loadEditor(key); });
-    $("[data-act=cancel]", cell).addEventListener("click", () => loadEditor(key));
-  }));
-  $$("[data-slot]", el).forEach((s) => s.addEventListener("change", async () => {
-    await api("/api/manual/slot", { method: "POST", body: JSON.stringify({ team_key: key, nba_id: +s.dataset.slot, slot: s.value }) });
-    afterManualChange();
-  }));
-  bindPlayerLinks(el);
-}
-
-let pendingDrop = null;  // {key, pid}: a drop held until the next add on that team
-async function editRoster(key, change) {
-  const body = { team_key: key, ...change };
-  if (change.add && pendingDrop && pendingDrop.key === key) {  // the held drop goes with this add
-    body.drop = pendingDrop.pid;
-    pendingDrop = null;
-  }
-  const r = await fetch("/api/manual/roster", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (!r.ok) {
-    const d = await r.json().catch(() => ({}));
-    $("#roster-editor").insertAdjacentHTML("afterbegin", `<div class="note" style="border-left:3px solid var(--critical);margin-bottom:8px">${esc(d.detail || "Edit failed")}</div>`);
-    return;
-  }
-  loadEditor(key); loadSetup(); afterManualChange();
-}
-
 /* ------------------------------------------------------------------ lineup optimizer */
 let lineupData = null, lineupDay = 0;
 async function loadLineup() {
@@ -1047,8 +881,7 @@ function renderLineup() {
   el.innerHTML = `
     ${changes && D.gain > 0.5 ? `<div class="note" style="border-left:3px solid var(--serious);margin-bottom:10px"><b>${isToday ? "Change today" : "Planned changes"}:</b>
       ${D.start.length ? `start ${esc(D.start.join(", "))}` : ""}${D.start.length && D.sit.length ? "; " : ""}${D.sit.length ? `bench ${esc(D.sit.join(", "))}` : ""}
-      <span class="muted">(+${fmt(D.gain, 1)} expected ${unit})</span>
-      ${isToday ? `<button class="btn" id="lineup-apply" style="margin-left:8px">I set this in Yahoo</button>` : ""}</div>` : ""}
+      <span class="muted">(+${fmt(D.gain, 1)} expected ${unit})</span></div>` : ""}
     <div class="tbl-wrap"><table><thead><tr><th>Slot</th><th>Player</th><th>Game</th><th class="r" title="Chance he plays, after injuries and rest risk">Plays</th><th class="r">Exp. ${unit}</th><th></th></tr></thead><tbody>
     ${D.lineup.map((x) => x.empty ? `<tr><td><span class="slot">${esc(x.slot)}</span></td><td class="muted" colspan="5">empty: nobody eligible with a game</td></tr>` : `<tr>
       <td><span class="slot">${esc(x.slot)}</span></td>
@@ -1057,14 +890,8 @@ function renderLineup() {
       <td class="small">${x.locked ? '<span class="muted" title="His game has started: Yahoo has locked him">🔒 locked</span>' : x.current_slot === "BN" ? '<span class="delta-up">▲ start</span>' : ""}</td></tr>`).join("")}
     </tbody></table></div>
     <div class="small muted" style="margin-top:8px">Bench: ${D.bench.map((b) => `${esc(b.name)} <span class="muted">(${esc(b.reason)})</span>`).join(", ") || "nobody"}</div>
-    ${D.unknown_positions.length ? `<div class="small delta-down" style="margin-top:4px">Unknown positions (Util only): ${esc(D.unknown_positions.join(", "))}. Re-paste that team to fix.</div>` : ""}
-    <div class="small muted" style="margin-top:4px">${D.first_tip ? `First tip-off ${isToday ? "today" : "that day"}: <b>${esc(D.first_tip)}</b>. ` : ""}Yahoo locks each player when his game starts${D.locked && D.locked.length ? ` (locked now: ${esc(D.locked.join(", "))})` : ""}. Set this before tip-off, then press "I set this in Yahoo" so the week-to-date score follows the right starters.</div>`;
-  const ap = $("#lineup-apply");
-  if (ap) ap.addEventListener("click", async () => {
-    await api("/api/lineup/apply", { method: "POST" });
-    ap.textContent = "Saved"; ap.disabled = true;
-    afterManualChange().then(loadLineup);
-  });
+    ${D.unknown_positions.length ? `<div class="small delta-down" style="margin-top:4px">Unknown positions (Util only): ${esc(D.unknown_positions.join(", "))}.</div>` : ""}
+    <div class="small muted" style="margin-top:4px">${D.first_tip ? `First tip-off ${isToday ? "today" : "that day"}: <b>${esc(D.first_tip)}</b>. ` : ""}Yahoo locks each player when his game starts${D.locked && D.locked.length ? ` (locked now: ${esc(D.locked.join(", "))})` : ""}: set this in Yahoo before tip-off.</div>`;
   bindPlayerLinks(el);
 }
 
@@ -1100,7 +927,6 @@ async function checkPlayer(pid) {
     "Marginal": ["", "Marginal: small or uncertain gain"], "not worth it": ["st-critical", "Not worth it: no drop makes your team better"],
     "owned": ["st-warning", "Not available: on another team"], "already yours": ["", "Already on your team"],
   }[e.verdict] || ["", e.verdict];
-  const manual = !!S.manual;
   el.innerHTML = `<div class="card"><div class="hd">
       <h2><a href="#" class="pname" data-pid="${e.nba_id}">${esc(e.name)}</a></h2><span class="pteam">${esc(e.team || "no NBA team")} · ${fmt(e.per_game, 1)} ${unit}</span>
       <span class="status ${V[0]}" style="margin-left:auto"><span class="dot" ${V[0] ? "" : 'style="background:var(--axis)"'}></span>${esc(V[1])}</span></div>
@@ -1109,14 +935,13 @@ async function checkPlayer(pid) {
       ${best && e.verdict !== "owned" ? `<p style="margin:4px 0 12px">Best option: <b>drop ${esc(best.drop_name)}</b> → ${signed(best.score, 2)} expected wins
         (${Math.abs(best.week_dwin * 100) < 1.5 ? "≈0" : signed(best.week_dwin * 100, 1)} pp this week, ${signed(best.season_dwins, 2)} wins rest of season), ${pct(best.confidence)} confident.
         ${best.urgency_reason ? `<span class="muted">${esc(best.urgency)}: ${esc(best.urgency_reason)}.</span>` : ""}</p>` : ""}
-      ${e.options.length ? `<div class="tbl-wrap"><table><thead><tr><th>If you drop</th><th class="r">This week</th><th class="r">Rest of season</th><th class="r">Total</th><th class="r">Confidence</th><th></th></tr></thead><tbody>
+      ${e.options.length ? `<div class="tbl-wrap"><table><thead><tr><th>If you drop</th><th class="r">This week</th><th class="r">Rest of season</th><th class="r">Total</th><th class="r">Confidence</th></tr></thead><tbody>
         ${e.options.map((o, i) => `<tr ${i === 0 && e.verdict !== "owned" ? 'style="background:var(--surface-2)"' : ""}>
           <td><span class="pname">${esc(o.drop_name)}</span> <span class="pteam">${esc(o.drop_team || "")} · ${o.drop_games} g left</span></td>
           <td class="r num">${Math.abs(o.week_dwin * 100) < 1.5 ? "≈0" : signed(o.week_dwin * 100, 1) + "pp"}</td>
           <td class="r num">${signed(o.season_dwins, 2)}</td>
           <td class="r num"><b class="${o.score > 0.01 ? "delta-up" : o.score < -0.01 ? "delta-down" : ""}">${signed(o.score, 2)}</b></td>
-          <td class="r num">${pct(o.confidence)}</td>
-          <td class="r">${manual && e.verdict !== "owned" && o.score > 0 ? `<button class="btn ghost small" data-do="${o.drop}">Made this move</button>` : ""}</td></tr>`).join("")}
+          <td class="r num">${pct(o.confidence)}</td></tr>`).join("")}
         </tbody></table></div>
         <div class="small muted" style="margin-top:8px">"Total" is expected matchup wins added: this week's win-probability change plus the rest-of-season gain. This-week changes within ±1.5pp are simulation noise (≈0).</div>` : ""}
       <div style="margin-top:10px;display:flex;gap:8px">
@@ -1129,73 +954,9 @@ async function checkPlayer(pid) {
     const r = await watchPlayer(e.nba_id, best ? best.drop : null);
     w.textContent = r.error ? r.error : "★ Watching"; w.disabled = true;
   });
-  $$("#check-result [data-do]").forEach((b) => b.addEventListener("click", async () => {
-    if (!confirm(`Add ${e.name} and drop this player on your roster here? (Make the move in Yahoo too.)`)) return;
-    const r = await fetch("/api/manual/roster", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ team_key: S.manual.teams.find((t) => t.is_mine).team_key, add: e.nba_id, drop: +b.dataset.do, slot: "BN" }) });
-    const d = await r.json();
-    b.textContent = r.ok ? "Done: logged" : (d.detail || "failed"); b.disabled = true;
-    if (r.ok) afterManualChange();
-  }));
 }
 
 /* ------------------------------------------------------------------ history */
-const tx = { ins: [], outs: [] };
-function txPicker(el, side, scope) {
-  el.innerHTML = `<input placeholder="Search…"><div class="opts card hidden"></div><div class="picked"></div>`;
-  const input = $("input", el), opts = $(".opts", el);
-  let t;
-  input.addEventListener("input", () => {
-    clearTimeout(t);
-    t = setTimeout(async () => {
-      if (input.value.trim().length < 2) { opts.classList.add("hidden"); return; }
-      const hits = await api(`/api/players/search?q=${encodeURIComponent(input.value.trim())}&scope=${scope()}`);
-      opts.innerHTML = hits.map((h) => `<div class="opt" data-id="${h.nba_id}" data-name="${esc(h.name)}"><span><b>${esc(h.name)}</b> <span class="pteam">${esc(h.team || "")}</span></span><span class="muted small">${esc(h.owner)}</span></div>`).join("") || `<div class="opt muted">No match</div>`;
-      opts.classList.remove("hidden");
-      $$(".opt[data-id]", opts).forEach((o) => o.addEventListener("click", () => {
-        if (!tx[side].some((x) => x.id === +o.dataset.id)) tx[side].push({ id: +o.dataset.id, name: o.dataset.name });
-        input.value = ""; opts.classList.add("hidden"); renderTxPicked();
-      }));
-    }, 200);
-  });
-  input.addEventListener("blur", () => setTimeout(() => opts.classList.add("hidden"), 200));
-}
-
-function renderTxPicked() {
-  [["ins", "#tx-in"], ["outs", "#tx-out"]].forEach(([side, sel]) => {
-    $(`${sel} .picked`).innerHTML = tx[side].map((p, i) => `<span class="chip" data-i="${i}" title="Remove">${esc(p.name)} ✕</span>`).join("");
-    $$(`${sel} .picked .chip`).forEach((c) => c.addEventListener("click", () => { tx[side].splice(+c.dataset.i, 1); renderTxPicked(); }));
-  });
-}
-
-function initHistoryForm() {
-  $("#tx-date").value = new Date().toISOString().slice(0, 10);
-  $("#tx-date").max = $("#tx-date").value;
-  txPicker($("#tx-in"), "ins", () => "others");
-  txPicker($("#tx-out"), "outs", () => "mine");
-  $("#tx-kind").addEventListener("change", async () => {
-    const trade = $("#tx-kind").value === "trade";
-    $("#tx-other").classList.toggle("hidden", !trade);
-    $("#tx-in-label").textContent = trade ? "You got (from the other team)" : "You got";
-    if (trade && !$("#tx-other").options.length) {
-      const m = await api("/api/manual").catch(() => null);
-      const teams = (m?.teams || S?.league_table || []).filter((t) => !t.is_mine);
-      $("#tx-other").innerHTML = `<option value="">Other team…</option>` + teams.map((t) => `<option value="${esc(t.team_key)}">${esc(t.name)}</option>`).join("");
-    }
-  });
-  $("#tx-save").addEventListener("click", async () => {
-    const st = $("#tx-status");
-    const body = { kind: $("#tx-kind").value, ins: tx.ins.map((p) => p.id), outs: tx.outs.map((p) => p.id),
-      effective: $("#tx-date").value, other_key: $("#tx-other").value || null, note: $("#tx-note").value };
-    st.textContent = "Recording…";
-    const r = await fetch("/api/history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const d = await r.json();
-    if (!r.ok) { st.textContent = d.detail || "Failed"; return; }
-    st.textContent = "Recorded."; tx.ins = []; tx.outs = []; $("#tx-note").value = ""; renderTxPicked();
-    loadHistory(); afterManualChange();
-  });
-}
-
 async function loadHistory() {
   loadTakes();
   loadModelTeam();
@@ -1205,7 +966,7 @@ async function loadHistory() {
   const line = (lbl, x) => `<div class="setting-row" style="grid-template-columns:1fr auto"><span>${lbl}</span><span class="num">${x.n ? `<b>${x.hits}/${x.n}</b> worked · net ${signed(x.net, 0)} ${unit}` : '<span class="muted">none finished yet</span>'}</span></div>`;
   $("#tx-score").innerHTML = line("Your own calls", sc.your_calls) + line("Suggestions you followed", sc.followed_suggestions) +
     `<div class="small muted" style="margin-top:8px">A move "worked" if the players you got outscored the players you gave up over the next 21 days (28 for trades). Your own calls also feed the model's confidence calibration.</div>`;
-  const SRC = { manual: "you entered", editor: "roster editor", paste: "re-paste", suggestion: "followed a suggestion", yahoo: "Yahoo" };
+  const SRC = { manual: "you entered", editor: "roster editor", paste: "re-paste", "yahoo-log": "pasted Yahoo log", suggestion: "followed a suggestion", yahoo: "Yahoo" };
   const items = H.items.map((t) => ({ date: t.effective, html: txCard(t, unit, SRC) }));
   const weeks = H.weeks.filter((w) => w.result != null || w.win_prob != null).map((w) => ({ date: "", week: w.week, html: `<div class="tx week">
       <div class="when">Week ${w.week}</div>
@@ -1213,16 +974,11 @@ async function loadHistory() {
       <div class="res">${w.result == null ? '<span class="muted">in progress</span>' : `<span class="status ${w.result === 1 ? "st-good" : w.result === 0 ? "st-critical" : "st-warning"}"><span class="dot"></span>${w.result === 1 ? "Won" : w.result === 0 ? "Lost" : "Tied"}</span>`}</div></div>` }));
   const el = $("#tx-list");
   el.innerHTML = (items.length || weeks.length) ? [...weeks, ...items].map((x) => x.html).join("")
-    : `<div class="empty">Nothing yet. Moves you make show up here: from the roster editor, re-pastes, suggestions you follow, or the form above.</div>`;
-  $$("#tx-list [data-txdate]").forEach((i) => i.addEventListener("change", async () => {
-    await api(`/api/history/${i.dataset.txdate}`, { method: "POST", body: JSON.stringify({ effective: i.value }) }); loadHistory();
-  }));
+    : `<div class="empty">Nothing yet. Moves you make in Yahoo show up here after the next sync.</div>`;
   $$("#tx-list [data-txdel]").forEach((b) => b.addEventListener("click", async () => {
-    if (!confirm("Remove this entry and undo its roster change?")) return;
-    const r = await (await fetch(`/api/history/${b.dataset.txdel}`, { method: "DELETE" })).json();
-    if (r.note) alert(r.note);
+    if (!confirm("Remove this entry from History? (It stays in Yahoo.)")) return;
+    await fetch(`/api/history/${b.dataset.txdel}`, { method: "DELETE" });
     loadHistory();
-    if (r.roster_reverted) afterManualChange();
   }));
   bindPlayerLinks(el);
 }
@@ -1241,7 +997,7 @@ function txCard(t, unit, SRC) {
       ${e.final ? `<span class="status ${ok ? "st-good" : "st-critical"}"><span class="dot"></span>${ok ? "Worked" : "Didn't work"}</span>` : `<span class="muted">so far · final ${esc(shortDate(e.horizon_end))}</span>`}`;
   }
   return `<div class="tx">
-    <div class="when"><input type="date" value="${esc(t.effective)}" max="${new Date().toISOString().slice(0, 10)}" data-txdate="${t.id}" class="btn" style="padding:2px 4px;font-size:11px;cursor:text" title="When it happened (change to re-score)">
+    <div class="when">${esc(shortDate(t.effective))}
       <div style="margin-top:4px"><span class="chip">${esc(kind)}</span></div></div>
     <div class="players">
       ${t.in.map((x) => `<div class="in">+ <a href="#" data-pid="${x.nba_id}">${esc(x.name)}</a> <span class="pteam">${esc(x.team || "")}</span></div>`).join("")}
@@ -1302,13 +1058,13 @@ function bindTakeBox(p, pid) {
     const d = await r.json();
     if (!r.ok) { $("#take-preview").textContent = d.detail || "Couldn't save"; return; }
     $("#take-save").textContent = "Saved: updating projections…"; $("#take-save").disabled = true;
-    afterManualChange().then(() => openPlayer(pid));
+    awaitRefresh().then(() => openPlayer(pid));
   });
   const clr = $("#take-clear");
   if (clr) clr.addEventListener("click", async () => {
     await fetch(`/api/take/${pid}`, { method: "DELETE" });
     clr.textContent = "Cleared: updating…"; clr.disabled = true;
-    afterManualChange().then(() => openPlayer(pid));
+    awaitRefresh().then(() => openPlayer(pid));
   });
 }
 
@@ -1418,55 +1174,6 @@ function renderTradeFinder(R) {
     renderPicked(); evalTrade();
     $("#trade-result").scrollIntoView({ behavior: "smooth" });
   }));
-}
-
-/* ------------------------------------------------------------------ free-agent list */
-function renderFaStatus(F) {
-  $("#fa-sub").textContent = F.pasted
-    ? `${F.players} players listed, ${F.on_waivers} on waivers · pasted ${ago(F.created)}${F.fresh ? "" : " (stale: re-paste)"}`
-    : "not pasted yet: availability is inferred from rosters";
-}
-
-async function importFa(append) {
-  const st = $("#fa-status"), text = $("#fa-text").value;
-  if (text.length < 50) { st.textContent = "Paste the Yahoo page first."; return; }
-  st.textContent = "Importing…";
-  const r = await fetch("/api/free-agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, append }) });
-  const d = await r.json();
-  if (!r.ok) { st.textContent = d.detail || "Import failed"; return; }
-  const dup = d.appended && d.new === 0;
-  const bits = [dup
-    ? `All ${d.added_now} players were already on the list: that's the same page again. In Yahoo, click Next 25, wait for the names to change, then copy.`
-    : `${d.added_now} players read, ${d.new} new ${d.appended ? "added to the list" : "(new list)"}: ${d.players} players now, ${d.on_waivers} on waivers. Next page: click Next 25 in Yahoo, copy, paste, Import page.`];
-  if (d.removed_from_outdated_rosters.length) bits.push(`Removed from outdated pasted rosters: ${d.removed_from_outdated_rosters.join(", ")}.`);
-  if (d.listed_but_on_your_roster.length) bits.push(`On your roster but listed as available (did you drop them?): ${d.listed_but_on_your_roster.join(", ")}.`);
-  if (d.unmatched.length) bits.push(`Couldn't match: ${d.unmatched.join(", ")}.`);
-  st.innerHTML = esc(bits.join(" "));
-  $("#fa-text").value = "";
-  renderFaStatus(await api("/api/free-agents"));
-  afterManualChange();
-}
-
-/* ------------------------------------------------------------------ Yahoo transaction log */
-async function importTxns() {
-  const st = $("#txn-status"), text = $("#txn-text").value;
-  if (text.length < 30) { st.textContent = "Paste the Yahoo transactions page first."; return; }
-  st.textContent = "Importing…";
-  const r = await fetch("/api/yahoo-log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
-  const d = await r.json();
-  if (!r.ok) { st.textContent = d.detail || "Import failed"; return; }
-  const part = (label, xs) => xs && xs.length ? `<div><b>${label}</b> ${esc(xs.join("; "))}</div>` : "";
-  st.innerHTML = `<div style="line-height:1.6">`
-    + part("Rosters updated:", d.applied)
-    + part("Your moves added to History:", d.your_moves_logged)
-    + part("Already up to date:", d.already_reflected)
-    + (d.already_seen ? `<div>${d.already_seen} imported before, skipped.</div>` : "")
-    + part("Skipped:", d.skipped)
-    + part("Not understood (send these to Claude):", d.unrecognized)
-    + (!d.applied.length && !d.your_moves_logged.length ? "<div>Nothing new: everything was already up to date.</div>" : "")
-    + `</div>`;
-  $("#txn-text").value = "";
-  loadHistory(); afterManualChange();
 }
 
 /* ------------------------------------------------------------------ the model's own team */

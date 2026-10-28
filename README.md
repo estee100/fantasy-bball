@@ -36,7 +36,9 @@ so everything works before you connect.
    (otherwise a keyword tagger handles news and scouting ingestion is off).
 
 The app is **read-only** against Yahoo. It recommends moves; you make them in the Yahoo app,
-and the next sync detects the roster change and logs it.
+and the next sync reads them from Yahoo's transaction log (exact times, every team) and logs
+yours to History, linked to the suggestion if you followed one. Rosters, lineup slots, waivers,
+the weekly add limit and adds used all come from the sync too.
 
 ## How it decides
 
@@ -56,7 +58,7 @@ and the next sync detects the roster change and logs it.
   season count?") is answered by backtesting the start of last season with the season before as
   the prior.
 - **News impact**: actual vs projected minutes after each news event type.
-- **Calibration**: every suggestion (made, dismissed, or ignored) and every manual move is
+- **Calibration**: every suggestion (made, dismissed, or ignored) and every move of your own is
   scored against real box scores at 7 days and at its horizon; stated confidence is corrected by
   that record.
 - **Matchup forecasts**: Brier score of weekly win probabilities once weeks resolve.
@@ -69,7 +71,7 @@ The Model & learning tab shows all of it.
   exactly; the simulator uses a fast fill that matches the exact answer ~98% of the time
   (misses cost about one bench decision). Players with unknown positions count as any
   position in the simulator and Util-only on the lineup card (flagged there).
-- Weekly add limits and waiver priority / FAAB aren't modeled.
+- Waiver priority / FAAB aren't modeled (who's on waivers, and until when, is).
 - Players with an injury-shortened last season fall back to the season before; players with
   no NBA history at all (rookies before their first games) lean on a generic rotation prior.
 - News feeds are free RSS/APIs: occasionally late compared to paid services.
