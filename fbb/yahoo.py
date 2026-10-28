@@ -183,6 +183,15 @@ def sync_rosters(q) -> dict:
                 c.execute("UPDATE players SET yahoo_key=?, positions=?, yahoo_status=? WHERE nba_id=?",
                           (_s(_get(p, "player_key")), positions, _s(_get(p, "status")), pid))
     with db.cursor() as c:
+        old = {r["team_key"]: r["name"] for r in c.execute("SELECT team_key, name FROM fantasy_teams")
+               if r["team_key"] not in rosters}
+        names = {r["name"].strip().lower(): r["team_key"] for r in c.execute(
+            "SELECT team_key, name FROM fantasy_teams") if r["team_key"] in rosters}
+    if rosters and old:
+        # a pasted league's History, predictions and lineups carry its own team keys: move them
+        # onto the Yahoo team of the same name before those teams go
+        rekey_teams({k: names[n.strip().lower()] for k, n in old.items() if n.strip().lower() in names})
+    with db.cursor() as c:
         # teams from an earlier demo or pasted league would otherwise linger (one still flagged mine)
         if rosters:  # an empty answer from Yahoo must not wipe the league
             c.execute(f"DELETE FROM fantasy_teams WHERE team_key NOT IN ({','.join('?' * len(rosters))})",
@@ -192,6 +201,24 @@ def sync_rosters(q) -> dict:
             c.executemany("INSERT OR REPLACE INTO rosters VALUES (?,?,?)", [(key, pid, s) for pid, s in plist])
     db.kv_set("unmatched_players", unmatched)
     return {"my_key": my_key, "rosters": {k: [p for p, _ in v] for k, v in rosters.items()}}
+
+
+TEAM_KEY_COLUMNS = [("transactions", "team_key"), ("transactions", "other_key"),
+                    ("matchup_predictions", "team_key"), ("matchup_predictions", "opp_key"),
+                    ("lineup_days", "team_key"), ("league_moves", "team_key"), ("shadow_days", "opp_key")]
+
+
+def rekey_teams(mapping: dict) -> None:
+    """Re-point every stored team key in mapping (old -> new). Rows that would collide with
+    one already under the new key are the same record twice; the new key's copy is kept."""
+    from . import history, shadow
+    history._ensure()
+    shadow._ensure()
+    with db.cursor() as c:
+        for old, new in mapping.items():
+            for table, col in TEAM_KEY_COLUMNS:
+                c.execute(f"UPDATE OR IGNORE {table} SET {col}=? WHERE {col}=?", (new, old))
+                c.execute(f"DELETE FROM {table} WHERE {col}=?", (old,))
 
 
 def sync_matchups(q, my_key, week) -> None:
@@ -292,6 +319,119 @@ def sync_waivers(q, league_key) -> None:
     free_agents.set_yahoo_waivers(found)
 
 
+def parse_transactions(raw) -> list:
+    """[{key, type, status, when (UTC), moves: [(name, team, kind, from_team_key, to_team_key)]}]
+    from a league transactions page, newest first as Yahoo lists them. kind is add/drop/trade;
+    a team key is None for free agents or waivers."""
+    league = (raw.get("fantasy_content") or {}).get("league") or []
+    txs = league[1].get("transactions") if len(league) > 1 and isinstance(league[1], dict) else {}
+    out = []
+    for k, v in (txs or {}).items():
+        if k == "count":
+            continue
+        head = v["transaction"][0]
+        body = v["transaction"][1] if len(v["transaction"]) > 1 else {}
+        moves = []
+        for pk, pv in ((body or {}).get("players") or {}).items():
+            if pk == "count":
+                continue
+            meta = {kk: vv for d in pv["player"][0] if isinstance(d, dict) for kk, vv in d.items()}
+            td = pv["player"][1]["transaction_data"]
+            td = td[0] if isinstance(td, list) else td   # Yahoo sends a list for adds, a dict for drops
+            moves.append((meta["name"]["full"], meta.get("editorial_team_abbr", ""), td["type"],
+                          td.get("source_team_key"), td.get("destination_team_key")))
+        out.append({"key": head["transaction_key"], "type": head["type"], "status": head.get("status"),
+                    "when": datetime.fromtimestamp(int(head["timestamp"]), timezone.utc), "moves": moves})
+    return out
+
+
+def sync_transactions(q, league_key, my_key) -> None:
+    """Every add, drop and trade in the league at the time Yahoo made it, from Yahoo's log. Moves
+    made while this app wasn't running still land at the right time, which week-to-date scoring
+    needs (who was on whose roster for each game); yours also go to History."""
+    known = set(db.kv_get("yahoo_txn_keys") or [])
+    first = not known
+    new, start = [], 0
+    while True:
+        page = parse_transactions(q.get_response(f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_key}"
+                                                 f"/transactions;types=add,drop,trade;count=25;start={start}").json())
+        fresh = [t for t in page if t["key"] not in known]
+        new += fresh
+        if len(page) < 25 or len(fresh) < len(page):  # newest first: past this point, all seen
+            break
+        start += 25
+    idx, mine = _player_index(), []
+    for t in reversed(new):   # oldest first, so History stays in order
+        if t["status"] != "successful":
+            continue          # e.g. a pending trade: picked up once it goes through
+        ts = t["when"].astimezone().isoformat()
+        ins, outs, other = [], [], None
+        for name, team, kind, src, dst in t["moves"]:
+            pid = _match(idx, name, team)
+            if not pid:
+                log.warning("transaction %s: no match for %s", t["key"], name)
+                continue
+            if dst:
+                db.add_move(dst, ts, pid, "add", "yahoo-api")
+            if src:
+                db.add_move(src, ts, pid, "drop", "yahoo-api")
+            if dst == my_key:
+                ins.append(pid)
+                other = other or src
+            if src == my_key:
+                outs.append(pid)
+                other = other or dst
+        if ins or outs:
+            mine.append((t, ins, outs, other))
+        known.add(t["key"])
+    if first and new:
+        # The first read walks the whole season, so Yahoo's times now cover every move: the
+        # approximate ones (roster editor, paste minutes, roster comparisons) are superseded.
+        with db.cursor() as c:
+            c.execute("DELETE FROM league_moves WHERE source<>'yahoo-api'")
+    if mine:
+        from . import sim
+        ctx = sim.load_context()
+        for t, ins, outs, other in mine:
+            _log_my_transaction(ctx, my_key, t, ins, outs, other)
+    db.kv_set("yahoo_txn_keys", sorted(known))
+
+
+def _log_my_transaction(ctx, my_key, t, ins, outs, other):
+    import json
+    from datetime import timedelta
+    from . import history
+    history._ensure()
+    kind = "trade" if t["type"] == "trade" else "add/drop" if ins and outs else "add" if ins else "drop"
+    when = t["when"].astimezone()
+    eff = when.date()
+    with db.cursor() as c:
+        if c.execute("SELECT 1 FROM transactions WHERE yahoo_key=?", (t["key"],)).fetchone():
+            return
+        # Already in History (roster editor, a paste, a suggestion marked done, or an earlier
+        # sync's roster comparison): link it to Yahoo's record and take Yahoo's date and times.
+        for r in c.execute("SELECT id, players_in, players_out, source, effective FROM transactions"
+                           " WHERE deleted=0 AND yahoo_key IS NULL AND effective BETWEEN ? AND ?",
+                           ((eff - timedelta(days=3)).isoformat(), (eff + timedelta(days=3)).isoformat())).fetchall():
+            if sorted(json.loads(r["players_in"])) == sorted(ins) and sorted(json.loads(r["players_out"])) == sorted(outs):
+                c.execute("UPDATE transactions SET yahoo_key=?, effective=?,"
+                          " kind=CASE WHEN kind='roster change' THEN ? ELSE kind END WHERE id=?",
+                          (t["key"], eff.isoformat(), kind, r["id"]))
+                players = ins + outs
+                c.execute("DELETE FROM league_moves WHERE team_key IN (?, ?) AND source=? AND substr(ts, 1, 10)=?"
+                          f" AND nba_id IN ({','.join('?' * len(players))})",
+                          [my_key, other or my_key, r["source"], r["effective"]] + players)
+                return
+    mv = _followed_suggestion(ins, outs, before=t["when"].isoformat())
+    if mv:
+        with db.cursor() as c:  # executed when Yahoo made the move, not when the sync noticed
+            c.execute("UPDATE moves SET status='executed', executed_at=? WHERE id=?",
+                      (t["when"].isoformat(timespec="seconds"), mv))
+    history.record(ctx, kind, ins, outs, effective=eff.isoformat(), other_key=other if kind == "trade" else None,
+                   source="suggestion" if mv else "yahoo", move_id=mv, yahoo_key=t["key"], moves_logged=True,
+                   note="from Yahoo's transaction log")
+
+
 def _find_stats(node):
     if isinstance(node, dict):
         if "stat_id" in node and "value" in node:
@@ -371,14 +511,16 @@ def diagnose(q) -> list:
     return out
 
 
-def _followed_suggestion(ins, outs):
-    """The open suggestion (or pending waiver claim) this one-for-one roster change carries out."""
+def _followed_suggestion(ins, outs, before=None):
+    """The open suggestion (or pending waiver claim) this one-for-one roster change carries out.
+    before: the move's UTC ISO time; a suggestion made after it can't be what you followed."""
     if len(ins) != 1 or len(outs) > 1:
         return None
     with db.cursor() as c:
         row = c.execute("SELECT id FROM moves WHERE add_id=? AND (drop_id=? OR (? IS NULL AND drop_id IS NULL))"
-                        " AND status IN ('suggested', 'claimed') ORDER BY created DESC LIMIT 1",
-                        (ins[0], outs[0] if outs else None, outs[0] if outs else None)).fetchone()
+                        " AND status IN ('suggested', 'claimed') AND created <= ? ORDER BY created DESC LIMIT 1",
+                        (ins[0], outs[0] if outs else None, outs[0] if outs else None,
+                         before or db.now_iso())).fetchone()
     return row["id"] if row else None
 
 
@@ -398,7 +540,13 @@ def sync() -> dict:
     if r["my_key"]:
         sync_matchups(q, r["my_key"], info["week"])
         now = r["rosters"].get(r["my_key"], [])
-        if before is not None and set(before) != set(now):
+        try:
+            sync_transactions(q, db.kv_get("league_key"), r["my_key"])
+            logged = True
+        except Exception as e:  # fall back to comparing rosters: right moves, approximate times
+            log.warning("transaction log unavailable: %s", e)
+            logged = False
+        if not logged and before is not None and set(before) != set(now):
             from . import history, sim
             ctx = sim.load_context()
             ins, outs = [p for p in now if p not in before], [p for p in before if p not in now]

@@ -93,9 +93,10 @@ def predict(ctx, kind, ins, outs, effective, other_key=None) -> dict:
 
 
 def record(ctx, kind: str, ins: list, outs: list, effective: str | None = None, other_key=None,
-           source="manual", note="", move_id=None, apply=False, yahoo_key=None) -> int:
+           source="manual", note="", move_id=None, apply=False, yahoo_key=None, moves_logged=False) -> int:
     """Log a roster change on your team. apply=True also makes the change to the pasted
-    rosters (manual mode); the roster editor and pastes call this after they've applied."""
+    rosters (manual mode); the roster editor and pastes call this after they've applied.
+    moves_logged: the caller already stored the exact add/drop times (Yahoo's transaction log)."""
     _ensure()
     from . import manual
     effective = effective or date.today().isoformat()
@@ -128,7 +129,7 @@ def record(ctx, kind: str, ins: list, outs: list, effective: str | None = None, 
                         (db.now_iso(), effective, kind, me, other_key, json.dumps(ins), json.dumps(outs),
                          source, note, move_id, yahoo_key, json.dumps(pred, default=float)))
         tid = cur.lastrowid
-    if source != "yahoo-log":   # the Yahoo log stores exact times itself
+    if source != "yahoo-log" and not moves_logged:   # the Yahoo log stores exact times itself
         _log_moves(me, kind, ins, outs, other_key, effective, db.now_iso(), source)
     if me:
         db.kv_set("my_roster_last", _roster(me))

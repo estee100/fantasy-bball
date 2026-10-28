@@ -112,6 +112,26 @@ def test_parse_roster_adds_reads_weekly_count():
     assert yahoo.parse_roster_adds({"fantasy_content": {"team": [[{"team_key": "x"}]]}}) is None
 
 
+def test_parse_transactions_reads_who_moved_where_and_when():
+    # shape of a real league transactions response: an add's transaction_data is a list, a drop's a dict
+    def player(name, team, td):
+        return {"player": [[{"player_key": "p"}, {"name": {"full": name}}, {"editorial_team_abbr": team}], {"transaction_data": td}]}
+    raw = {"fantasy_content": {"league": [{"league_key": "x"}, {"transactions": {
+        "0": {"transaction": [{"transaction_key": "478.l.1.tr.59", "type": "add/drop", "status": "successful",
+                               "timestamp": "1793145038"},
+                              {"players": {"0": player("Julian Champagnie", "SAS", [{"type": "add", "source_type": "freeagents",
+                                                                                      "destination_team_key": "478.l.1.t.3"}]),
+                                           "1": player("Dillon Brooks", "PHX", {"type": "drop", "source_team_key": "478.l.1.t.3",
+                                                                                "destination_type": "waivers"}),
+                                           "count": 2}}]},
+        "count": 1}}]}}
+    (t,) = yahoo.parse_transactions(raw)
+    assert t["key"] == "478.l.1.tr.59" and t["status"] == "successful"
+    assert t["when"].isoformat() == "2026-10-27T23:50:38+00:00"
+    assert t["moves"] == [("Julian Champagnie", "SAS", "add", None, "478.l.1.t.3"),
+                          ("Dillon Brooks", "PHX", "drop", "478.l.1.t.3", None)]
+
+
 def test_parse_waivers_reads_name_team_positions_and_date():
     # shape of a real league players;status=W;out=ownership response
     raw = {"fantasy_content": {"league": [{"league_key": "x"}, {"players": {
