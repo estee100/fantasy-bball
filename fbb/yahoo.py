@@ -72,12 +72,14 @@ def sync_settings(q) -> dict:
         key = config.YAHOO_STAT_IDS.get(int(_get(st, "stat_id", default=-1)))
         if key:
             points[key] = float(_get(st, "value", default=0))
-    active = roster = 0
+    active = roster = il = 0
     for rp in _get(settings, "roster_positions", default=[]) or []:
         rp = _unwrap(rp)
         pos, n = _s(_get(rp, "position")), int(_get(rp, "count", default=0) or 0)
         if pos not in ("IL", "IL+", "NA"):
             roster += n
+        if pos in ("IL", "IL+"):
+            il += n
         if pos not in INACTIVE_SLOTS:
             active += n
     mode = "points" if "point" in scoring_type else "categories"
@@ -97,6 +99,7 @@ def sync_settings(q) -> dict:
     db.kv_set("num_teams", int(_get(meta, "num_teams", default=10)))
     db.kv_set("active_slots", active or config.DEFAULT_ACTIVE_SLOTS)
     db.kv_set("roster_size", roster or 13)
+    db.kv_set("il_slots", il or None)
     db.kv_set("current_week", week)
     max_adds = int(_get(settings, "max_weekly_adds", default=0) or 0)
     if max_adds > 0:

@@ -22,7 +22,6 @@ from datetime import date, datetime, timedelta
 from . import db, lineup, model, recommend, sim
 
 MAX_ADDS_WEEK = 4
-IL_SLOTS = recommend.IL_SLOTS
 MOVE_LABELS = {"Do today", "Worth doing", "Waiver claim"}
 MIN_OPEN_SPOT_GAIN = 0.02
 
@@ -170,7 +169,7 @@ def daily(ctx, today=None) -> dict:
                 _log(today, "activate", p, None, reason="healthy again")
                 done.append(f"activated {ctx.name(p)}")
     for p in sorted(s["roster"], key=lambda q: -recommend.ros_value(ctx, q)):
-        if len(s["il"]) < IL_SLOTS and recommend.injury_plan(ctx, p) == "il":  # not for a game or two
+        if len(s["il"]) < recommend.il_slots() and recommend.injury_plan(ctx, p) == "il":  # not for a game or two
             s["roster"].remove(p)
             s["il"].append(p)
             _log(today, "to IL", None, None, reason=f"{ctx.name(p)} out")

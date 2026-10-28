@@ -116,7 +116,13 @@ def describe(ctx, B, m, with_urgency=True) -> dict:
     return m
 
 
-IL_SLOTS = 2   # Oct 2026 pastes show a team with 2 players on IL
+IL_SLOTS = 2   # without a Yahoo sync: Oct 2026 pastes show a team with 2 players on IL
+
+
+def il_slots() -> int:
+    """The league's IL slots from the Yahoo sync (Gordon's League has 3), else the paste guess."""
+    return db.kv_get("il_slots") or IL_SLOTS
+
 # IL is for absences long enough to be worth an add now and a drop when he's back (~a week).
 # A game or two: bench him. Out for the season: cutting him keeps the IL slot for later.
 IL_MIN_GAMES = 3
@@ -175,7 +181,7 @@ def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11, log=True, budget=No
     # A benched player listed Out with an IL slot free should go to IL, not be cut: that's a
     # free roster spot. Without this, Duren (out ~2 weeks, Oct 2026) kept showing as the drop.
     to_il = [p for p in sorted(mine, key=lambda p: -ros_value(ctx, p))
-             if p not in il and injury_plan(ctx, p) == "il"][:max(0, IL_SLOTS - max(len(il), getattr(ctx, "il_used", 0)))]
+             if p not in il and injury_plan(ctx, p) == "il"][:max(0, il_slots() - max(len(il), getattr(ctx, "il_used", 0)))]
     il |= set(to_il)
     drops = sorted((p for p in mine if p not in il), key=lambda p: ros_value(ctx, p))[:SCREEN_DROPS]
     open_spots = max(0, ctx.roster_size - (len(mine) - len(il)))
