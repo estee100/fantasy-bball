@@ -98,6 +98,9 @@ def sync_settings(q) -> dict:
     db.kv_set("active_slots", active or config.DEFAULT_ACTIVE_SLOTS)
     db.kv_set("roster_size", roster or 13)
     db.kv_set("current_week", week)
+    max_adds = int(_get(settings, "max_weekly_adds", default=0) or 0)
+    if max_adds > 0:
+        db.kv_set("max_adds_week", max_adds)
     db.kv_set("weeks_remaining", max(0, end_week - week))
     if week in weeks:
         db.kv_set("week_range", list(weeks[week]))
@@ -174,6 +177,10 @@ def sync_rosters(q) -> dict:
                           (_s(_get(p, "player_key")), ",".join(_s(x) for x in (_get(p, "eligible_positions") or [])),
                            _s(_get(p, "status")), pid))
     with db.cursor() as c:
+        # teams from an earlier demo or pasted league would otherwise linger (one still flagged mine)
+        if rosters:  # an empty answer from Yahoo must not wipe the league
+            c.execute(f"DELETE FROM fantasy_teams WHERE team_key NOT IN ({','.join('?' * len(rosters))})",
+                      list(rosters))
         c.execute("DELETE FROM rosters")
         for key, plist in rosters.items():
             c.executemany("INSERT OR REPLACE INTO rosters VALUES (?,?,?)", [(key, pid, s) for pid, s in plist])
@@ -212,6 +219,33 @@ def sync_matchups(q, my_key, week) -> None:
         except Exception as e:
             log.warning("week-to-date stats unavailable for %s: %s", key, e)
     db.kv_set("week_to_date", wtd)
+
+
+def sync_adds(q, my_key) -> None:
+    """Yahoo's own count of adds used this week. The local transaction log misses any move
+    made in the Yahoo app that wasn't logged here, so this is the number that counts."""
+    try:
+        raw = q.get_response(f"https://fantasysports.yahooapis.com/fantasy/v2/team/{my_key}/metadata").json()
+        ra = parse_roster_adds(raw)
+    except Exception as e:
+        log.warning("weekly adds unavailable: %s", e)
+        ra = None
+    db.kv_set("yahoo_adds", ra)
+
+
+def parse_roster_adds(node):
+    """{"week": n, "used": n} from a team metadata response, or None."""
+    if isinstance(node, dict):
+        ra = node.get("roster_adds")
+        if isinstance(ra, dict) and ra.get("coverage_type") == "week":
+            return {"week": int(ra["coverage_value"]), "used": int(ra.get("value") or 0)}
+        node = list(node.values())
+    if isinstance(node, list):
+        for v in node:
+            hit = parse_roster_adds(v)
+            if hit:
+                return hit
+    return None
 
 
 def _find_stats(node):
@@ -315,6 +349,7 @@ def sync() -> dict:
             history.record(ctx, "roster change", [p for p in now if p not in before],
                            [p for p in before if p not in now], source="yahoo")
         db.kv_set("my_roster_last", now)
+        sync_adds(q, r["my_key"])
     db.kv_set("yahoo_synced", db.now_iso())
     return dict(info, my_key=r["my_key"], unmatched=db.kv_get("unmatched_players", []))
 

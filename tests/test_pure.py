@@ -104,6 +104,14 @@ def test_parse_team_stats_reads_fraction_stats():
     assert out == {"fgm": 120.0, "fga": 250.0, "pts": 330.0}
 
 
+def test_parse_roster_adds_reads_weekly_count():
+    # shape of a real team/metadata response
+    raw = {"fantasy_content": {"team": [[{"team_key": "x"}, {"number_of_trades": 0},
+        {"roster_adds": {"coverage_type": "week", "coverage_value": 2, "value": "4"}}, []]]}}
+    assert yahoo.parse_roster_adds(raw) == {"week": 2, "used": 4}
+    assert yahoo.parse_roster_adds({"fantasy_content": {"team": [[{"team_key": "x"}]]}}) is None
+
+
 # ---------------------------------------------------------------- calibration math
 
 def test_temperature_pulls_toward_half():

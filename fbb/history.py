@@ -335,4 +335,8 @@ def adds_this_week(ctx) -> int:
 def add_budget(ctx) -> dict:
     limit = db.kv_get("max_adds_week")
     used = adds_this_week(ctx)
+    ya = db.kv_get("yahoo_adds") if db.kv_get("league_source") == "yahoo" else None
+    if ya and ya["week"] == db.kv_get("current_week"):
+        # Yahoo's count is authoritative; the log can still be ahead by a move made since the sync
+        used = max(used, ya["used"])
     return {"limit": limit, "used": used, "left": None if not limit else max(0, limit - used)}
