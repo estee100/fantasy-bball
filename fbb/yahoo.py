@@ -172,10 +172,13 @@ def sync_rosters(q) -> dict:
                 continue
             slot = _s(_get(p, "selected_position", "position"))
             rosters[key].append((pid, slot))
+            # yfpy's eligible_positions keeps only the first position (yfpy 17: Mitchell ['PG']);
+            # display_position is Yahoo's full base-position list, "PG,SG", same as a paste
+            positions = _s(_get(p, "display_position")) or ",".join(
+                _s(x) for x in (_get(p, "eligible_positions") or []))
             with db.cursor() as c:
                 c.execute("UPDATE players SET yahoo_key=?, positions=?, yahoo_status=? WHERE nba_id=?",
-                          (_s(_get(p, "player_key")), ",".join(_s(x) for x in (_get(p, "eligible_positions") or [])),
-                           _s(_get(p, "status")), pid))
+                          (_s(_get(p, "player_key")), positions, _s(_get(p, "status")), pid))
     with db.cursor() as c:
         # teams from an earlier demo or pasted league would otherwise linger (one still flagged mine)
         if rosters:  # an empty answer from Yahoo must not wipe the league
