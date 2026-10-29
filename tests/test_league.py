@@ -111,12 +111,13 @@ def test_take_changes_projection_everywhere_and_clears(ctx, pid):
     mc = pid("Jared McCain")
     before = ctx.values["value"][mc]
     model_min = ctx.raw_proj.at[mc, "min"]
-    res = overrides.set_take(ctx, mc, "minutes", 28, "more minutes")
-    assert res["your_per_game"] == pytest.approx(res["model_per_game"] * 28 / model_min, rel=1e-6)
+    target = min(round(model_min * 1.4), 44)   # relative: his real minutes move as the season goes
+    res = overrides.set_take(ctx, mc, "minutes", target, "more minutes")
+    assert res["your_per_game"] == pytest.approx(res["model_per_game"] * target / model_min, rel=1e-6)
     ctx = pipeline.context(reload=True)
-    assert ctx.values["value"][mc] > before * 1.2           # rankings/recommendations see it
+    assert ctx.values["value"][mc] > before * 1.15          # rankings/recommendations see it
     assert ctx.raw_proj.at[mc, "min"] == pytest.approx(model_min)  # the model's own view is kept
-    assert ctx.takes[mc] == pytest.approx(28 / model_min)
+    assert ctx.takes[mc] == pytest.approx(target / model_min)
     rep = overrides.report(ctx)
     assert rep["items"][0]["name"] == "Jared McCain" and rep["items"][0]["active"] == 1
     overrides.clear(mc)

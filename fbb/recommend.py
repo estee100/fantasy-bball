@@ -423,8 +423,16 @@ def evaluate_trade(ctx, give: list, get: list) -> dict:
     rostered = ctx.rostered()
     fa = best_free_agents(ctx)
 
-    def fix_size(r):
-        r = list(r)
+    from . import lineup
+    all_slots = sim.team_slots(ctx)
+
+    def fix_size(r, key):
+        """Cut the weakest / fill from free agents to the roster limit. IL players don't count
+        toward it. Both sides of the comparison go through this, before and after: comparing a
+        resized roster with the raw one (IL players counted, so 1-2 cut) made a trade that
+        changes nothing score -0.85 wins, and every real trade looked bad (Oct 2026)."""
+        il = [p for p in r if all_slots.get(key, {}).get(p) in lineup.NOT_STARTABLE]
+        r = [p for p in r if p not in il]
         while len(r) > ctx.roster_size:
             r.remove(min(r, key=lambda p: ros_value(ctx, p)))
         for p in fa:
@@ -432,14 +440,15 @@ def evaluate_trade(ctx, give: list, get: list) -> dict:
                 break
             if p not in r:
                 r.append(p)
-        return r
+        return r + il
 
-    new_mine = fix_size([p for p in mine if p not in give] + list(get))
-    new_theirs = fix_size([p for p in theirs if p not in get] + list(give))
+    new_mine = fix_size([p for p in mine if p not in give] + list(get), ctx.my_key)
+    new_theirs = fix_size([p for p in theirs if p not in get] + list(give), other_key)
     eff = effective_weeks(ctx)
-    me = (sim.season_strength(ctx, new_mine) - sim.season_strength(ctx, mine)) * eff
+    base_mine = fix_size(mine, ctx.my_key)
+    me = (sim.season_strength(ctx, new_mine) - sim.season_strength(ctx, base_mine)) * eff
     them = (sim.season_strength(ctx, new_theirs, exclude_key=other_key)
-            - sim.season_strength(ctx, theirs, exclude_key=other_key)) * eff if theirs else None
+            - sim.season_strength(ctx, fix_size(theirs, other_key), exclude_key=other_key)) * eff if theirs else None
     cat_shift = {}
     if model.scoring_mode() == "categories":
         for k in ctx.cats:
@@ -448,4 +457,5 @@ def evaluate_trade(ctx, give: list, get: list) -> dict:
     return {"my_dwins": me, "their_dwins": them, "other_team": other_key,
             "cat_shift": cat_shift,
             "verdict": "accept" if me > 0.05 else ("decline" if me < -0.05 else "roughly even"),
-            "auto_filled": [ctx.name(p) for p in new_mine if p not in mine and p not in get]}
+            "auto_filled": [ctx.name(p) for p in new_mine if p not in base_mine and p not in get],
+            "auto_cut": [ctx.name(p) for p in base_mine + list(get) if p not in new_mine and p not in give]}
