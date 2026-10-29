@@ -382,3 +382,32 @@ def test_il_players_are_never_suggested_drops_and_open_spots_are_found(ctx, monk
     assert all(m["drop"] != il_player for m in r["moves"])
     if len(me) - 1 < ctx.roster_size:
         assert r["open_spot"] and r["open_spot"]["spots"] >= 1
+
+
+# ---------------------------------------------------------------- trades: acceptance, resizing
+
+def test_acceptance_reads_names_and_points(ctx):
+    from fbb import recommend
+    others = [p for k, ids in ctx.rosters.items() if k != ctx.my_key for p in ids]
+    ranked = sorted(others, key=lambda p: -recommend.seen_value(ctx, p))
+    star, scrub = ranked[0], ranked[-1]
+    mine = sorted(ctx.rosters[ctx.my_key], key=lambda p: -recommend.seen_value(ctx, p))
+    # they give their best player for my worst: no
+    assert recommend.acceptance(ctx, [mine[-1]], [star])["label"] == "unlikely"
+    # my best for their worst: they'd take that
+    assert recommend.acceptance(ctx, [mine[0]], [scrub])["label"] == "likely"
+
+
+def test_trade_baseline_is_resized_like_the_trade(ctx):
+    """IL players don't count toward the roster limit, and before/after get the same resizing:
+    otherwise every trade starts in the hole (a no-change trade scored -0.85 wins)."""
+    from fbb import recommend, sim, lineup
+    me = ctx.my_key
+    roster = ctx.rosters[me]
+    fa = recommend.best_free_agents(ctx)
+    r = recommend.resized_roster(ctx, roster, me, fa)
+    slots = sim.team_slots(ctx).get(me, {})
+    il = [p for p in roster if slots.get(p) in lineup.NOT_STARTABLE]
+    assert set(il) <= set(r)
+    assert len([p for p in r if p not in il]) == ctx.roster_size
+    assert recommend.resized_roster(ctx, r, me, fa) == r      # resizing twice changes nothing

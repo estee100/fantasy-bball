@@ -19,18 +19,6 @@ MAX_THEIR_LOSS = 0.02  # they shouldn't lose more than this (the model's view of
 SCREEN_LIMIT = 600     # full evaluations per search
 
 
-def _fix_size(ctx, roster, fa_sorted):
-    roster = list(roster)
-    while len(roster) > ctx.roster_size:
-        roster.remove(min(roster, key=lambda p: recommend.ros_value(ctx, p)))
-    for p in fa_sorted:
-        if len(roster) >= ctx.roster_size:
-            break
-        if p not in roster:
-            roster.append(p)
-    return roster
-
-
 def find(ctx, limit=12, progress=None) -> dict:
     me = ctx.my_key
     v = ctx.values["value"]
@@ -40,7 +28,10 @@ def find(ctx, limit=12, progress=None) -> dict:
     rostered = ctx.rostered()
     fa_sorted = recommend.best_free_agents(ctx)
     eff = recommend.effective_weeks(ctx)
-    base_me = sim.season_strength(ctx, ctx.rosters[me])
+    # before and after both resized the same way (IL players excluded): see resized_roster
+    fit = lambda r, key: recommend.resized_roster(ctx, r, key, fa_sorted)
+    before_me = fit(ctx.rosters[me], me)
+    base_me = sim.season_strength(ctx, before_me)
 
     cands = []
     for other, ids in ctx.rosters.items():
@@ -69,9 +60,9 @@ def find(ctx, limit=12, progress=None) -> dict:
         if progress and i % 25 == 0:
             progress(i, len(cands))
         if other not in base_them:
-            base_them[other] = sim.season_strength(ctx, ctx.rosters[other], exclude_key=other)
-        new_me = _fix_size(ctx, [p for p in ctx.rosters[me] if p not in give] + list(get), fa_sorted)
-        new_them = _fix_size(ctx, [p for p in ctx.rosters[other] if p not in get] + list(give), fa_sorted)
+            base_them[other] = sim.season_strength(ctx, fit(ctx.rosters[other], other), exclude_key=other)
+        new_me = fit([p for p in ctx.rosters[me] if p not in give] + list(get), me)
+        new_them = fit([p for p in ctx.rosters[other] if p not in get] + list(give), other)
         d_me = (sim.season_strength(ctx, new_me) - base_me) * eff
         if d_me < MIN_GAIN:
             continue
@@ -83,13 +74,15 @@ def find(ctx, limit=12, progress=None) -> dict:
                         "get": [_card(ctx, q) for q in get],
                         "shape": f"{len(give)}-for-{len(get)}",
                         "my_dwins": d_me, "their_dwins": d_them,
-                        "auto_filled": [ctx.name(p) for p in new_me if p not in ctx.rosters[me] and p not in get],
-                        "auto_dropped": [ctx.name(p) for p in ctx.rosters[me] if p not in new_me and p not in give],
-                        "stat_shift": _stat_shift(ctx, give, get)})
+                        "auto_filled": [ctx.name(p) for p in new_me if p not in before_me and p not in get],
+                        "auto_dropped": [ctx.name(p) for p in before_me + list(get) if p not in new_me and p not in give],
+                        "stat_shift": _stat_shift(ctx, give, get),
+                        "acceptance": recommend.acceptance(ctx, give, get)})
     if progress:
         progress(len(cands), len(cands))
-    # best first; at most 2 per partner so one team doesn't fill the list
-    results.sort(key=lambda r: -(r["my_dwins"] + 0.5 * max(r["their_dwins"], 0)))
+    # ones they'd plausibly say yes to first, then best for you; at most 2 per partner
+    rank = {"likely": 0, "maybe": 1, "unlikely": 2}
+    results.sort(key=lambda r: (rank[r["acceptance"]["label"]], -(r["my_dwins"] + 0.5 * max(r["their_dwins"], 0))))
     shown, per_team = [], {}
     for r in results:
         if per_team.get(r["other_key"], 0) >= 2:

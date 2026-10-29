@@ -420,27 +420,8 @@ def evaluate_trade(ctx, give: list, get: list) -> dict:
         raise ValueError("Players on the 'get' side belong to different teams")
     other_key = next(iter(owners), None)   # None = they're free agents
     theirs = ctx.rosters.get(other_key, [])
-    rostered = ctx.rostered()
     fa = best_free_agents(ctx)
-
-    from . import lineup
-    all_slots = sim.team_slots(ctx)
-
-    def fix_size(r, key):
-        """Cut the weakest / fill from free agents to the roster limit. IL players don't count
-        toward it. Both sides of the comparison go through this, before and after: comparing a
-        resized roster with the raw one (IL players counted, so 1-2 cut) made a trade that
-        changes nothing score -0.85 wins, and every real trade looked bad (Oct 2026)."""
-        il = [p for p in r if all_slots.get(key, {}).get(p) in lineup.NOT_STARTABLE]
-        r = [p for p in r if p not in il]
-        while len(r) > ctx.roster_size:
-            r.remove(min(r, key=lambda p: ros_value(ctx, p)))
-        for p in fa:
-            if len(r) >= ctx.roster_size:
-                break
-            if p not in r:
-                r.append(p)
-        return r + il
+    fix_size = lambda r, key: resized_roster(ctx, r, key, fa)
 
     new_mine = fix_size([p for p in mine if p not in give] + list(get), ctx.my_key)
     new_theirs = fix_size([p for p in theirs if p not in get] + list(give), other_key)
@@ -458,4 +439,77 @@ def evaluate_trade(ctx, give: list, get: list) -> dict:
             "cat_shift": cat_shift,
             "verdict": "accept" if me > 0.05 else ("decline" if me < -0.05 else "roughly even"),
             "auto_filled": [ctx.name(p) for p in new_mine if p not in base_mine and p not in get],
-            "auto_cut": [ctx.name(p) for p in base_mine + list(get) if p not in new_mine and p not in give]}
+            "auto_cut": [ctx.name(p) for p in base_mine + list(get) if p not in new_mine and p not in give],
+            "acceptance": acceptance(ctx, give, get)}
+
+
+def resized_roster(ctx, roster, key, fa) -> list:
+    """Cut the weakest / fill from free agents (`fa`, best first) to the roster limit. IL players
+    don't count toward it. Both sides of a before/after comparison must go through this:
+    comparing a resized roster with the raw one (IL players counted, so 1-2 cut) made a trade
+    that changes nothing score -0.85 wins, and every real trade looked bad (Oct 2026)."""
+    from . import lineup
+    slots = sim.team_slots(ctx).get(key, {})
+    il = [p for p in roster if slots.get(p) in lineup.NOT_STARTABLE]
+    r = [p for p in roster if p not in il]
+    while len(r) > ctx.roster_size:
+        r.remove(min(r, key=lambda p: ros_value(ctx, p)))
+    for p in fa:
+        if len(r) >= ctx.roster_size:
+            break
+        if p not in r:
+            r.append(p)
+    return r + il
+
+
+# How a manager judges an offer: the best player in it (the name) and the fantasy points per
+# game they can see. This is a rule of thumb, not learned: the model's "for them" number says
+# whether a trade helps their team, which isn't the same as whether they'll think it does.
+ACCEPT_TOP_SHARE = 0.85   # the best player they get vs the best they give
+SEEN_PRIOR_GAMES = 8      # last season's average counts as this many games of this season
+
+
+def seen_value(ctx, pid) -> float:
+    """Fantasy points per game as a manager sees them: this season's average, steadied by
+    last season's (early in the year, a slow start or a hot one dominates otherwise)."""
+    cache = ctx._pools.setdefault("_seen", {})
+    if pid not in cache:
+        from . import config
+        w = model.point_weights()
+        g = ctx.logs[ctx.logs["nba_id"] == pid]
+        fp = sum(g[k] * v for k, v in w.items() if k in g) if len(g) else None
+        cur = fp[g["season"] == config.SEASON] if fp is not None else []
+        prev = fp[g["season"] < config.SEASON] if fp is not None else []
+        last = None
+        if len(prev):
+            last_season = g.loc[g["season"] < config.SEASON, "season"].max()
+            last = float(fp[g["season"] == last_season].mean())
+        if len(cur) and last is not None:
+            v = (float(cur.sum()) + last * SEEN_PRIOR_GAMES) / (len(cur) + SEEN_PRIOR_GAMES)
+        elif len(cur):
+            v = float(cur.mean())
+        else:
+            v = last if last is not None else float(ctx.values["value"].get(pid, 0.0))
+        cache[pid] = v
+    return cache[pid]
+
+
+def acceptance(ctx, give, get) -> dict:
+    """Will the other manager take it? From their side: they receive `give`, send `get`.
+    likely: they get the best player (or close) AND at least as many points per game;
+    maybe: one of the two; unlikely: neither."""
+    sv = lambda ps: [(ctx.name(p), seen_value(ctx, p)) for p in ps]
+    recv, send = sv(give), sv(get)
+    top_r, top_s = max(v for _, v in recv), max(v for _, v in send)
+    tot_r, tot_s = sum(v for _, v in recv), sum(v for _, v in send)
+    top_ok, tot_ok = top_r >= ACCEPT_TOP_SHARE * top_s, tot_r >= tot_s
+    best_r, best_s = max(recv, key=lambda x: x[1])[0], max(send, key=lambda x: x[1])[0]
+    reasons = []
+    reasons.append(f"best player: {best_r} ({top_r:.0f}/g) for {best_s} ({top_s:.0f}/g)"
+                   + ("" if top_ok else ": they give up the bigger name"))
+    reasons.append(f"points per game: they get {tot_r:.0f}, give {tot_s:.0f}"
+                   + ("" if tot_ok else ": they'd see a loss"))
+    label = "likely" if top_ok and tot_ok else ("maybe" if top_ok or tot_ok else "unlikely")
+    return {"label": label, "reasons": reasons,
+            "seen": {"they_get": [{"name": n, "per_game": v} for n, v in recv],
+                     "they_give": [{"name": n, "per_game": v} for n, v in send]}}

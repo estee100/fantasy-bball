@@ -627,7 +627,18 @@ async function evalTrade() {
       const w = (Math.abs(v) / smax) * 50;
       return `<div class="zrow"><span>${esc(catLabel(k))}</span><div class="ztrack"><div class="mid"></div><div class="bar" style="${v >= 0 ? `left:50%;width:${w}%;background:var(--div-pos)` : `left:${50 - w}%;width:${w}%;background:var(--div-neg)`}"></div></div><span class="num" style="text-align:right">${signed(v, 1)}</span></div>`;
     }).join("")}</div>` : ""}
+    ${r.acceptance ? acceptBlock(r.acceptance) : ""}
     ${r.auto_filled?.length ? `<div class="note" style="margin-top:12px">Open roster spots filled with the best free agents: ${esc(r.auto_filled.join(", "))}</div>` : ""}</div>`;
+}
+
+const ACCEPT_ST = { likely: "st-good", maybe: "st-warning", unlikely: "st-critical" };
+function acceptChip(a) {
+  return `<span class="status ${ACCEPT_ST[a.label]}" data-tip="${esc(a.reasons.join(" · "))}"><span class="dot"></span>${a.label === "likely" ? "They'd likely accept" : a.label === "maybe" ? "They might accept" : "They'd likely say no"}</span>`;
+}
+function acceptBlock(a) {
+  return `<h4 style="margin:16px 0 8px;font-size:13px">Will they accept? ${acceptChip(a)}</h4>
+    <ul class="small" style="margin:0">${a.reasons.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+    <div class="small muted" style="margin-top:4px">How most managers judge an offer: the biggest name and the fantasy points per game they can see (this season, steadied by last season). A rule of thumb, separate from the model's numbers above.</div>`;
 }
 
 /* ------------------------------------------------------------------ learning */
@@ -1152,7 +1163,7 @@ function renderTradeFinder(R) {
         .map(([k, v]) => `${STAT_LBL[k] || k} ${signed(v, 1)}`).join(", ");
       return `<div class="move" style="margin-bottom:8px">
         <div class="swap" style="display:grid;gap:4px">
-          <div><span class="chip">${esc(t.shape)}</span> with <b>${esc(t.other_team)}</b></div>
+          <div><span class="chip">${esc(t.shape)}</span> with <b>${esc(t.other_team)}</b> ${t.acceptance ? acceptChip(t.acceptance) : ""}</div>
           <div class="add"><span class="sign">+</span> ${t.get.map(pl).join(" &nbsp; ")}</div>
           <div class="drop"><span class="sign">−</span> ${t.give.map(pl).join(" &nbsp; ")}</div>
         </div>
