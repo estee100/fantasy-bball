@@ -287,12 +287,19 @@ STRUCTURAL_WEEKS = 4
 def _games_out(pid, injuries, events):
     """News-extracted timeline first (more specific), then the injury note's own wording."""
     ev = events.get(pid)
-    if ev and ev["games_out"] is not None:
-        return float(ev["games_out"])
     inj = injuries.get(pid)
+    note = None
     if inj and (inj["status"] or "").lower() in ("out", "doubtful", "suspension"):
-        return injury_games_out(inj["comment"] or "", inj["status"] or "")
-    return None
+        note = injury_games_out(inj["comment"] or "", inj["status"] or "")
+    if ev and ev["games_out"] is not None:
+        g = float(ev["games_out"])
+        # Only good news (a return date) can shorten the note's timeline. A routine "out
+        # Saturday" item about a long injury isn't a new timeline (Nov 2026: Sharpe, torn
+        # meniscus, six months, read as one game out and recommended as a pickup).
+        if note is not None and (ev.get("direction") or 0) < 0:
+            return max(g, note)
+        return g
+    return note
 
 
 # Consecutive team games already missed by players listed Out (set when a context loads).

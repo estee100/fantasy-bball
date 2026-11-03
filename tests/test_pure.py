@@ -97,6 +97,14 @@ def test_start_of_season_is_not_season_ending():
     assert g is not None and 5 <= g <= 30  # a tear with no timeline: weeks, not the season
 
 
+def test_routine_news_doesnt_shorten_a_long_injury():
+    inj = {1: {"status": "Out", "comment": "torn meniscus, expected to miss six months", "date": "2026-10-01"}}
+    bad = {1: {"games_out": 1, "direction": -1}}     # "out Saturday"
+    good = {1: {"games_out": 2, "direction": 1}}     # "targeting a return next week"
+    assert model._games_out(1, inj, bad) > 60
+    assert model._games_out(1, inj, good) == 2
+
+
 def test_game_in_progress_counts_only_what_is_left():
     """Yahoo's week-to-date points are live: a game under way is partly in them already."""
     from datetime import datetime, timedelta, timezone
