@@ -285,21 +285,48 @@ STRUCTURAL_WEEKS = 4
 
 
 def _games_out(pid, injuries, events):
-    """News-extracted timeline first (more specific), then the injury note's own wording."""
+    return _games_out_src(pid, injuries, events)[0]
+
+
+def _games_out_src(pid, injuries, events):
+    """(games out, US date the timeline was written) from the news timeline or the injury note.
+    News first (more specific), then the note's own wording. The date is what the clock runs
+    from: games the team has played since count toward it."""
     ev = events.get(pid)
     inj = injuries.get(pid)
     note = None
-    if inj and (inj["status"] or "").lower() in ("out", "doubtful", "suspension"):
+    # day-to-day notes too: "rested on Monday" under Day-To-Day is one game, then he's back
+    if inj and (inj["status"] or "").lower() in ("out", "doubtful", "suspension", "day-to-day"):
         note = injury_games_out(inj["comment"] or "", inj["status"] or "")
+    note_day = us_day(inj.get("date")) if inj else None
     if ev and ev["games_out"] is not None:
         g = float(ev["games_out"])
         # Only good news (a return date) can shorten the note's timeline. A routine "out
         # Saturday" item about a long injury isn't a new timeline (Nov 2026: Sharpe, torn
         # meniscus, six months, read as one game out and recommended as a pickup).
-        if note is not None and (ev.get("direction") or 0) < 0:
-            return max(g, note)
-        return g
-    return note
+        if note is not None and (ev.get("direction") or 0) < 0 and note > g:
+            return note, note_day
+        return g, us_day(ev.get("date"))
+    return note, note_day
+
+
+def us_day(stamp):
+    """The US calendar day a timestamp falls on. Notes refreshed late Monday night US time
+    are stamped Tuesday in UTC; reading the UTC date made "out for Monday's game" look
+    unserved, so it took his Wednesday game instead (Nov 2026: Nembhard)."""
+    if not stamp:
+        return None
+    s = str(stamp)
+    if len(s) <= 10:
+        return s[:10]
+    from datetime import datetime, timezone
+    try:
+        t = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return s[:10]
+    if t.tzinfo is None:
+        return s[:10]
+    return (t.astimezone(timezone.utc) - timedelta(hours=8)).date().isoformat()  # ~US Pacific
 
 
 # Consecutive team games already missed by players listed Out (set when a context loads).
@@ -347,11 +374,12 @@ def availability(pid, game_dates, injuries, events, b2b, team_dates_set):
         base = INJURY_AVAIL.get(status, 0.7)
         if status == "out" and SEASON_ENDING.search((inj["comment"] or "").lower()):
             base = 0.0
-    games_out = _games_out(pid, injuries, events)
-    if games_out is not None and inj and inj.get("date"):
-        # the note's clock started when it was written: games the team has played since then
-        # already count toward it (e.g. "out for Wednesday's opener", read on Thursday)
-        noted = str(inj["date"])[:10]
+    games_out, noted = _games_out_src(pid, injuries, events)
+    if games_out is not None and noted:
+        # the clock started when the note (or news) was written: games the team has played
+        # since already count toward it (e.g. "out for Wednesday's opener", read on Thursday).
+        # News timelines used to skip this, so "out 1 game" took his next game every day for
+        # the two weeks news stays recent (Nov 2026: Paul Reed)
         elapsed = sum(1 for d in team_dates_set if noted <= d < date.today().isoformat())
         games_out = max(0.0, games_out - elapsed)
         if games_out == 0:

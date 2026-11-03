@@ -105,6 +105,29 @@ def test_routine_news_doesnt_shorten_a_long_injury():
     assert model._games_out(1, inj, good) == 2
 
 
+def test_one_game_timelines_count_down_from_the_us_day_written():
+    from datetime import date, timedelta
+    today = date.today()
+    mon, wed = (today - timedelta(days=1)).isoformat(), (today + timedelta(days=1)).isoformat()
+    team = {mon, wed}
+    # note refreshed after midnight UTC on Monday night US time: Monday's game is the one
+    late_utc = f"{today.isoformat()}T05:50Z"
+    inj = {1: {"status": "Day-To-Day", "comment": "out for Monday's game", "date": late_utc}}
+    assert model.availability(1, [wed], inj, {}, {}, team)[0] >= 0.8
+    # news "out 1 game" counts down too (it used to take his next game for two weeks)
+    ev = {2: {"games_out": 1, "direction": -1, "date": mon, "event_type": "injury", "minutes_multiplier": None}}
+    assert model.availability(2, [wed], {}, ev, {}, team)[0] > 0.8
+
+
+def test_reddit_and_unknown_publishers_dont_move_the_model():
+    from fbb import news
+    assert not news.is_credible("Reddit", "Paul Reed versus Aday Mara")
+    assert not news.is_credible("Google News", "Shocking Luka update - Fadeaway World")
+    assert news.is_credible("Google News", "Paul Reed News: Enters starting lineup - RotoWire")
+    assert news.is_credible("Google News", "Pistons notes - The Detroit News")
+    assert news.is_credible("ESPN", "anything")
+
+
 def test_game_in_progress_counts_only_what_is_left():
     """Yahoo's week-to-date points are live: a game under way is partly in them already."""
     from datetime import datetime, timedelta, timezone

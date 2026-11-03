@@ -37,6 +37,40 @@ RSS_FEEDS = {
 }
 # broad feeds: keep only items that name a player (cuts noise and Claude cost)
 PLAYER_ONLY = {"RealGM", "HoopsRumors", "Reddit", "Google News"}
+# Who can move the model. Reddit is discussion, not reporting: it's kept for the news tab but
+# never turned into events (Nov 2026: a post titled "Paul Reed versus Aday Mara" was read as
+# Reed out a game). Google News pulls from any site, so its items need a known publisher: the
+# insider and beat-writer outlets, not content farms, betting sites or aggregator rewrites.
+DISCUSSION_ONLY = {"Reddit"}
+CREDIBLE_PUBLISHERS = {
+    "rotowire", "yahoo sports", "espn", "nba.com", "cbs sports", "the athletic", "nbc sports",
+    "nbc sports bay area & california", "fantasypros", "the new york times", "usa today",
+    "sports illustrated", "sportsnet.ca", "realgm", "hoopsrumors", "hoops rumors", "the ringer",
+    "associated press", "ap news", "the washington post", "los angeles times", "boston globe",
+    "the boston globe", "chicago tribune", "the oklahoman", "the detroit news", "detroit free press",
+    "the dallas morning news", "arizona sports 98.7", "the plain dealer", "cleveland.com",
+}
+# local papers (team beat writers): "The <City> News/Times/Tribune/..."
+_LOCAL_PAPER = re.compile(r"^the [a-z .'-]+ (news|times|tribune|journal|post|herald|star|chronicle|"
+                          r"globe|inquirer|gazette|courier|observer|dispatch|plain dealer)$")
+
+
+def publisher(source: str, title: str):
+    """Google News titles end in " - <Publisher>"; other feeds are their own publisher."""
+    if source != "Google News":
+        return source
+    return title.rsplit(" - ", 1)[-1].strip() if " - " in (title or "") else None
+
+
+def is_credible(source: str, title: str) -> bool:
+    if source in DISCUSSION_ONLY:
+        return False
+    if source != "Google News":
+        return True
+    pub = (publisher(source, title) or "").lower()
+    return pub in CREDIBLE_PUBLISHERS or bool(_LOCAL_PAPER.match(pub))
+
+
 MAX_AGE_DAYS = 3  # older items carry no fresh information (Google News returns months-old ones)
 ESPN_NEWS = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news?limit=50"
 ESPN_INJURIES = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
@@ -123,6 +157,8 @@ def fetch_news() -> int:
             pids = idx.find_in_text(f"{title} {summary}")
             if source in PLAYER_ONLY and not pids:
                 continue
+            if source == "Google News" and not is_credible(source, title):
+                continue  # unknown publisher: not even worth showing
             cur = c.execute("""INSERT OR IGNORE INTO news(id, source, title, summary, url, published, fetched, player_ids)
                                VALUES (?,?,?,?,?,?,?,?)""",
                             (nid, source, title, summary[:2000], url, pub, db.now_iso(), json.dumps(pids)))
@@ -214,7 +250,8 @@ def extract_events(batch_size=15, max_batches=4) -> int:
     if not rows:
         return 0
     relevant = relevant_player_ids()
-    todo = [r for r in rows if not relevant or set(json.loads(r["player_ids"])) & relevant]
+    todo = [r for r in rows if (not relevant or set(json.loads(r["player_ids"])) & relevant)
+            and is_credible(r["source"], r["title"])]
     skip = [r["id"] for r in rows if r not in todo]
     with db.cursor() as c:
         c.executemany("UPDATE news SET processed=1 WHERE id=?", [(i,) for i in skip])
