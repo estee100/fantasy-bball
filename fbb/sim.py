@@ -184,9 +184,32 @@ def player_games(ctx: Context, pid, dates) -> list:
     team = ctx.team_of(pid)
     tds = team_dates(ctx, team)
     # a game that already has box scores is history (week-to-date), not a future draw
-    gd = [d for d in dates if d in tds and (team, d) not in played_team_dates(ctx)]
+    # Availability over every game from today, then drop what's been played: a note like "out
+    # for Monday's game" is about tonight's game even once it's under way or over (filtering
+    # first moved the absence onto his next game: Nov 2026, Siakam and Watson).
+    gd = [d for d in dates if d in tds]
     av = model.availability(pid, gd, ctx.injuries, ctx.events, ctx.b2b, tds)
-    return list(zip(gd, av))
+    played = played_team_dates(ctx)
+    share = {d: 0.0 if (team, d) in played else _share_left(ctx, team, d) for d in gd}
+    return [(d, a * share[d]) for d, a in zip(gd, av) if share[d] > 0]
+
+
+GAME_MINUTES = 140  # tip-off to final buzzer, wall clock
+
+
+def _share_left(ctx: Context, team, d) -> float:
+    """Share of a game still to be played. Yahoo's week-to-date points are live, so a game in
+    progress is partly in them already; box scores only arrive once it's over. Counting it as
+    a whole future game counted it twice (Nov 2026: a full night of games on both sides, which
+    hid that the opponent was winning the night). Estimated from time since tip-off."""
+    if ctx.today or not ctx.wtd:
+        return 1.0  # backtest replay, or week-to-date from box scores (no live games in it)
+    from . import lineup
+    tip = lineup.tip_times(ctx).get((team, d))
+    if not tip:
+        return 1.0
+    elapsed = (datetime.now(tip.tzinfo) - tip).total_seconds() / 60
+    return float(min(1.0, max(0.0, 1 - elapsed / GAME_MINUTES)))
 
 
 def played_team_dates(ctx: Context) -> set:

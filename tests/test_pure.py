@@ -81,6 +81,9 @@ TODAY = date(2026, 10, 22)
     ("out for the season after surgery", 75, 90),
     ("sidelined until December", 20, 30),
     ("White (calf) is out for Wednesday's season opener against the Nets.", 1, 1),
+    ("Siakam will be rested against the Hawks on Monday.", 1, 1),
+    ("Brown (ankle) won't play Friday against Boston and will sit out tonight.", 1, 1),
+    ("Brown sprained his ankle on Monday and is out two weeks.", 6, 8),
 ])
 def test_injury_timelines(note, lo, hi):
     g = model.injury_games_out(note, "Out", TODAY)
@@ -92,6 +95,22 @@ def test_start_of_season_is_not_season_ending():
     assert not model.SEASON_ENDING.search(note.lower())
     g = model.injury_games_out(note, "Out", TODAY)
     assert g is not None and 5 <= g <= 30  # a tear with no timeline: weeks, not the season
+
+
+def test_game_in_progress_counts_only_what_is_left():
+    """Yahoo's week-to-date points are live: a game under way is partly in them already."""
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+    from fbb import sim
+    now = datetime.now(timezone.utc)
+    tips = {("AAA", "d"): now - timedelta(minutes=70), ("BBB", "d"): now - timedelta(hours=4),
+            ("CCC", "d"): now + timedelta(hours=1)}
+    live = SimpleNamespace(today=None, wtd={"t": {}}, _pools={"_tips": tips})
+    assert abs(sim._share_left(live, "AAA", "d") - 0.5) < 0.01
+    assert sim._share_left(live, "BBB", "d") == 0.0   # over, box score not in yet
+    assert sim._share_left(live, "CCC", "d") == 1.0
+    boxes = SimpleNamespace(today=None, wtd={}, _pools={"_tips": tips})
+    assert sim._share_left(boxes, "AAA", "d") == 1.0  # box-score week-to-date has no live games
 
 
 # ---------------------------------------------------------------- Yahoo parsing

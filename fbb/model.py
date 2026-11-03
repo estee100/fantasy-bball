@@ -268,6 +268,12 @@ def injury_games_out(comment: str, status: str = "", today=None):
         return STRUCTURAL_WEEKS * 7 * GAMES_PER_DAY
     if "day-to-day" in c or "game-time decision" in c:
         return 0.5
+    # A rest day or one named night, worded without "game" (Nov 2026: "Siakam will be rested
+    # against the Hawks on Monday" read as no timeline, so Out all week). Checked last so a
+    # real timeline elsewhere in the note ("hurt on Monday, out two weeks") wins.
+    if re.search(r"\brest(?:ed|ing)\b|\b(?:out|miss\w*|sit\w*|not play|won't play)\b.{0,50}"
+                 r"\b(?:on (?:mon|tues|wednes|thurs|fri|satur|sun)day|tonight)\b", c):
+        return 1.0
     return None
 
 
