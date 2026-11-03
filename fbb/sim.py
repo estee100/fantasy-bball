@@ -119,6 +119,12 @@ def season_week(today=None) -> int:
 
 
 def week_range_for(week: int):
+    """(start, end) of a fantasy week: Yahoo's dates when synced (the NBA Cup and All-Star
+    weeks run two weeks each), else 7-day steps from the first game's Monday. (Grading past
+    weeks with 7-day steps would have checked the wrong dates from week 8 on.)"""
+    yw = db.kv_get("game_weeks") or {}
+    if str(week) in yw:
+        return tuple(yw[str(week)])
     with db.cursor() as c:
         first = c.execute("SELECT min(game_date) FROM schedule").fetchone()[0]
     f = date.fromisoformat(first)

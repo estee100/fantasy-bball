@@ -113,6 +113,15 @@ def test_game_in_progress_counts_only_what_is_left():
     assert sim._share_left(boxes, "AAA", "d") == 1.0  # box-score week-to-date has no live games
 
 
+def test_week_dates_come_from_yahoo_when_synced(monkeypatch):
+    """Two Yahoo weeks run double (NBA Cup, All-Star): week 8 isn't 7 days after week 7."""
+    from fbb import db, sim
+    weeks = {"7": ["2026-11-30", "2026-12-13"], "8": ["2026-12-14", "2026-12-20"]}
+    monkeypatch.setattr(db, "kv_get", lambda k, d=None: weeks if k == "game_weeks" else d)
+    assert sim.week_range_for(8) == ("2026-12-14", "2026-12-20")
+    assert sim.week_range_for(7) == ("2026-11-30", "2026-12-13")
+
+
 # ---------------------------------------------------------------- Yahoo parsing
 
 def test_parse_team_stats_reads_fraction_stats():

@@ -487,6 +487,12 @@ def trades_status():
     return _json(_trade_job)
 
 
+@app.get("/api/playoffs")
+def playoffs():
+    from . import playoffs as po
+    return _json(po.scan(pipeline.context()))
+
+
 @app.get("/api/add-limit")
 def add_limit_get():
     from . import history

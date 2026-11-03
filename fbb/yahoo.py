@@ -105,6 +105,16 @@ def sync_settings(q) -> dict:
     if max_adds > 0:
         db.kv_set("max_adds_week", max_adds)
     db.kv_set("weeks_remaining", max(0, end_week - week))
+    # Yahoo's own week dates: two weeks run double (NBA Cup, All-Star), so week N isn't
+    # "first Monday + 7(N-1)" past them
+    if weeks:
+        db.kv_set("game_weeks", {str(k): list(v) for k, v in weeks.items()})
+    db.kv_set("end_week", end_week)
+    if int(_get(settings, "uses_playoff", default=0) or 0):
+        db.kv_set("playoff_start_week", int(_get(settings, "playoff_start_week", default=0) or 0) or None)
+        db.kv_set("num_playoff_teams", int(_get(settings, "num_playoff_teams", default=0) or 0) or None)
+    if _get(settings, "trade_end_date"):
+        db.kv_set("trade_end_date", _s(_get(settings, "trade_end_date")))
     if week in weeks:
         db.kv_set("week_range", list(weeks[week]))
     db.kv_set("league_key", league_key)

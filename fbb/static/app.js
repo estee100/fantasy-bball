@@ -83,6 +83,7 @@ function showTab(tab) {
   if (tab === "setup") loadSetup();
   if (tab === "watch") loadWatch();
   if (tab === "history") loadHistory();
+  if (tab === "trade") loadPlayoffs();
 }
 
 async function load() {
@@ -1185,6 +1186,31 @@ function renderTradeFinder(R) {
     renderPicked(); evalTrade();
     $("#trade-result").scrollIntoView({ behavior: "smooth" });
   }));
+}
+
+/* ------------------------------------------------------------------ playoff schedule */
+async function loadPlayoffs() {
+  const out = $("#po-out");
+  let R;
+  try { R = await api("/api/playoffs"); } catch (e) { out.innerHTML = `<div class="small muted">${esc(e.message)}</div>`; return; }
+  if (!R.available) { out.innerHTML = `<div class="small muted">${esc(R.reason)}</div>`; return; }
+  $("#po-sub").textContent = `${shortDate(R.start)} – ${shortDate(R.end)} · teams average ${fmt(R.avg_games, 1)} games` +
+    (R.trade_deadline ? ` · trade deadline ${shortDate(R.trade_deadline)}` : "");
+  const tbl = (rows, showOwner) => `<div class="tbl-wrap"><table><thead><tr><th>Player</th>${showOwner ? "<th>Team</th>" : ""}
+      <th class="r">Games</th><th class="r">Proj/g</th><th class="r">Playoff pts</th>
+      <th class="r" data-tip="(his games − the average) × projected pts/game">Schedule edge</th></tr></thead><tbody>${rows.map((x) => `
+      <tr><td><a href="#" data-pid="${x.nba_id}">${esc(x.name)}</a> <span class="pteam">${esc(x.team || "")}</span></td>
+      ${showOwner ? `<td class="small">${esc(x.owner)}</td>` : ""}
+      <td class="r num">${x.games}</td><td class="r num">${fmt(x.per_game, 1)}</td><td class="r num">${fmt(x.playoff_pts, 0)}</td>
+      <td class="r num ${x.edge >= 0 ? "delta-up" : "delta-down"}">${signed(x.edge, 0)}</td></tr>`).join("")}</tbody></table></div>`;
+  const top = R.teams[0].games, low = R.teams[R.teams.length - 1].games;
+  const most = R.teams.filter((t) => t.games === top).map((t) => t.team).join(", ");
+  const least = R.teams.filter((t) => t.games === low).map((t) => t.team).join(", ");
+  out.innerHTML = `<div class="small" style="margin-bottom:8px">Most games: <b>${esc(most)}</b> (${top}) · fewest: <b>${esc(least)}</b> (${low})</div>
+    <h3 style="margin:12px 0 4px;font-size:1em">Yours <span class="sub small muted">lightest schedules first: trade candidates near the deadline</span></h3>${tbl(R.mine, false)}
+    <h3 style="margin:12px 0 4px;font-size:1em">Targets <span class="sub small muted">above-average schedules, projected better than your weakest player</span></h3>${tbl(R.targets, true)}
+    <div class="small muted" style="margin-top:8px">The schedule is fixed, so the games are safe to plan on; the projections aren't. Late in the season NBA teams rest players, especially contenders locked into a seed, so count a star on one as a bit less than his games suggest.</div>`;
+  bindPlayerLinks(out);
 }
 
 /* ------------------------------------------------------------------ the model's own team */
