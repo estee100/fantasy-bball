@@ -370,13 +370,61 @@ def _synthetic_lines(ctx, pid, n=30):
     return out
 
 
+def _slot_of(ctx: Context) -> dict:
+    """{player: his Yahoo lineup slot}. Empty in a backtest: those rosters aren't today's."""
+    if ctx.today:
+        return {}
+    return {p: s for team in team_slots(ctx).values() for p, s in team.items()}
+
+
+def can_score(ctx: Context, pids, dates) -> list:
+    """Players who can score without a roster move. An IL player has to leave the IL to play,
+    which takes an open roster spot; with a full roster he scores nothing until you drop
+    someone. (Nov 2026: Watson, on the IL with 13 active, added 46 points and 13 points of win
+    chance for his two games back.) With room, the most useful IL players fill it."""
+    from . import lineup
+    slots = _slot_of(ctx)
+    il = [p for p in pids if slots.get(p) in lineup.NOT_STARTABLE]
+    if not il:
+        return list(pids)
+    active = [p for p in pids if p not in il]
+    room = max(0, ctx.roster_size - len(active))
+    worth = lambda p: float(ctx.values["value"].get(p, 0.0)) * sum(a for _, a in player_games(ctx, p, dates))
+    return active + sorted(il, key=worth, reverse=True)[:room]
+
+
+def _locked_out_today(ctx: Context, pids, day) -> set:
+    """Bench players who can't score today: once a game tips off, its players' slots are locked
+    for the day. A bench player whose game has started stayed benched; one still to play needs a
+    slot that isn't held by a player already under way. (Starters who had finished left the
+    day's simulation, which opened their slots to the bench.)"""
+    from . import lineup
+    if ctx.today or not ctx.wtd:
+        return set()
+    slots = _slot_of(ctx)
+    if not any(slots.get(p) not in (None, "?") for p in pids):
+        return set()  # no lineup known for this team
+    played = played_team_dates(ctx)
+    tds = {p: ctx.team_of(p) for p in pids}
+    plays = [p for p in pids if day in team_dates(ctx, tds[p])]
+    begun = lambda p: (tds[p], day) in played or _share_left(ctx, tds[p], day) < 1.0
+    bench = [p for p in plays if slots.get(p) in lineup.NOT_STARTING and slots.get(p) not in lineup.NOT_STARTABLE]
+    held = sum(1 for p in plays if slots.get(p) not in lineup.NOT_STARTING and begun(p))
+    waiting = sorted((p for p in bench if not begun(p)), key=lambda p: -float(ctx.values["value"].get(p, 0.0)))
+    return {p for p in bench if begun(p)} | set(waiting[max(0, ctx.active_slots - held):])
+
+
 def simulate_team(ctx: Context, pids, dates, n_sims=2000, seed=7, wtd=None) -> np.ndarray:
     """(n_sims, len(SIM_STATS)) weekly totals for a roster, honoring the daily active-slot cap."""
     totals = np.zeros((n_sims, len(SIM_STATS)))
     if wtd:
         totals += np.array([wtd.get(s, 0.0) for s in SIM_STATS])
     value = ctx.values["value"]
+    pids = can_score(ctx, pids, dates)
     sched = {pid: dict(player_games(ctx, pid, dates)) for pid in pids}
+    today = date.today().isoformat()
+    for pid in _locked_out_today(ctx, pids, today):
+        sched[pid].pop(today, None)
     # A player's level isn't known exactly and drifts week to week (role, minutes, matchups):
     # each simulated week draws one shared multiplier per player (mean 1, learned spread).
     sd = float(ctx.params.get("weekly_form_sd", 0.0) or 0.0)
