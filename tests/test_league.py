@@ -411,3 +411,23 @@ def test_trade_baseline_is_resized_like_the_trade(ctx):
     assert set(il) <= set(r)
     assert len([p for p in r if p not in il]) == ctx.roster_size
     assert recommend.resized_roster(ctx, r, me, fa) == r      # resizing twice changes nothing
+
+
+def test_buy_low_gaps_are_consistent(ctx):
+    # the "seen" number is the one the trade acceptance check uses, the two gap parts add up
+    # to projection - seen, and each list holds who it says it does
+    from fbb import buylow, recommend
+    R = buylow.scan(ctx)
+    if not R["available"]:
+        pytest.skip(R["reason"])
+    owner = {p: k for k, r in ctx.rosters.items() for p in r}
+    for k in ("buy_low", "sell_high", "hold", "pickups"):
+        for x in R[k]:
+            p = x["nba_id"]
+            assert x["seen"] == pytest.approx(recommend.seen_value(ctx, p))
+            assert x["rate_gap"] + x["min_gap"] == pytest.approx(x["proj"] - x["seen"])
+            assert abs(x["this_season"]["min"] - x["last_season"]["min"]) <= buylow.MAX_MIN_CHANGE
+            assert abs(x["rate_gap"]) >= buylow.MIN_GAP
+            mine = owner.get(p) == ctx.my_key
+            assert mine == (k in ("sell_high", "hold"))
+            assert (p in owner) == (k != "pickups")

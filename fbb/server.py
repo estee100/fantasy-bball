@@ -487,6 +487,12 @@ def trades_status():
     return _json(_trade_job)
 
 
+@app.get("/api/buy-low")
+def buy_low():
+    from . import buylow
+    return _json(buylow.scan(pipeline.context()))
+
+
 @app.get("/api/playoffs")
 def playoffs():
     from . import playoffs as po

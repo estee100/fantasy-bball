@@ -84,6 +84,7 @@ function showTab(tab) {
   if (tab === "watch") loadWatch();
   if (tab === "history") loadHistory();
   if (tab === "trade") loadPlayoffs();
+  if (tab === "trade") loadBuyLow();
 }
 
 async function load() {
@@ -1186,6 +1187,41 @@ function renderTradeFinder(R) {
     renderPicked(); evalTrade();
     $("#trade-result").scrollIntoView({ behavior: "smooth" });
   }));
+}
+
+/* ------------------------------------------------------------------ buy low / sell high */
+const BL_GROUPS = [
+  ["buy_low", "Buy low", "on other teams, producing below the projection per minute: the model expects a bounce back"],
+  ["sell_high", "Sell high", "yours, producing above it: their manager sees more than the model expects"],
+  ["hold", "Don't sell low", "yours, producing below it: an offer now buys him at the bottom"],
+  ["pickups", "Free agents", "producing below the projection, projected above your weakest player"],
+];
+async function loadBuyLow() {
+  const out = $("#bl-out");
+  let R;
+  try { R = await api("/api/buy-low"); } catch (e) { out.innerHTML = `<div class="small muted">${esc(e.message)}</div>`; return; }
+  if (!R.available) { out.innerHTML = `<div class="small muted">${esc(R.reason)}</div>`; return; }
+  const fgp = (x) => (x == null ? "–" : pct(x, 0));
+  const tbl = (rows) => `<div class="tbl-wrap"><table><thead><tr><th>Player</th><th>Team</th><th class="r">Proj</th><th class="r">Seen</th>
+      <th class="r" data-tip="Projected minutes × (projected − seen pts per minute): the part the model expects to even out">Per-min gap</th>
+      <th>This season</th><th>Last season</th><th>Why / caveats</th></tr></thead><tbody>${rows.map((x) => {
+    const drv = x.drivers.map((d) => `${STAT_LBL[d.stat] || d.stat} ${signed(d.fp, 1)}`).join(", ");
+    const flags = [x.injury ? injuryStatus(x.injury) : "",
+      ...x.alerts.map((a) => { const [l, st] = ALERT_KIND[a.kind] || [a.kind, ""]; return `<span class="status ${st}" data-tip="${esc(a.title)}"><span class="dot"></span>${esc(l)}</span>`; })].join(" ");
+    return `<tr><td><a href="#" data-pid="${x.nba_id}">${esc(x.name)}</a> <span class="pteam">${esc(x.team || "")}</span></td>
+      <td class="small">${x.owner === "mine" ? '<span class="chip mine">Yours</span>' : esc(x.owner)}</td>
+      <td class="r num">${fmt(x.proj, 1)}</td><td class="r num">${fmt(x.seen, 1)}</td>
+      <td class="r num ${x.rate_gap >= 0 ? "delta-up" : "delta-down"}">${signed(x.rate_gap, 1)}</td>
+      <td class="small num">${fmt(x.this_season.fp, 1)} in ${fmt(x.this_season.min, 0)}m · FG ${fgp(x.this_season.fg_pct)} · ${x.this_season.games}g</td>
+      <td class="small num">${fmt(x.last_season.fp, 1)} in ${fmt(x.last_season.min, 0)}m · FG ${fgp(x.last_season.fg_pct)}</td>
+      <td class="small">${drv ? esc(drv) : ""} ${flags}</td></tr>`;
+  }).join("")}</tbody></table></div>`;
+  out.innerHTML = BL_GROUPS.map(([k, title, sub]) => `<h3 style="margin:12px 0 4px;font-size:1em">${title} <span class="sub small muted">${sub}</span></h3>` +
+      (R[k].length ? tbl(R[k]) : `<div class="small muted">Nobody past ${fmt(R.min_gap, 0)} pts/game.</div>`)).join("") +
+    `<div class="small muted" style="margin-top:8px">Proj = the model's fantasy pts/game; Seen = this season's average steadied by last season's, roughly what another manager judges by.
+      Only the per-minute part of the gap counts: players whose minutes moved more than 6/game since last season are left out (new role, so last season's per-minute numbers don't carry over).
+      The bounce back assumes last season repeats; age, a new team or an injury he's playing through can make a slow start real.</div>`;
+  bindPlayerLinks(out);
 }
 
 /* ------------------------------------------------------------------ playoff schedule */
