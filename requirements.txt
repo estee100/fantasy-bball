@@ -6,6 +6,7 @@ anthropic>=0.70
 feedparser>=6.0
 rapidfuzz>=3.0
 apscheduler>=3.10
+tzlocal>=5.4.5  # 5.4.4 crashes on Windows' new "Alberta Standard Time" zone
 pandas>=2.0
 numpy>=1.26
 pydantic>=2.0
