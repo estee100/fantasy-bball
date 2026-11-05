@@ -234,6 +234,14 @@ def _client():
 NEEDS_CLAUDE = 2  # processed by the keyword fallback while Claude was failing; re-run when it works
 
 
+def claude_error_is_stale(err: dict) -> bool:
+    """Should a stored config error be retried? Yes if the settings changed, or if it was about credits:
+    a top-up changes nothing locally, so only another call can tell. A rejected call isn't billed."""
+    return (err.get("key_tail") != config.ANTHROPIC_KEY[-6:]
+            or err.get("workspace") != config.ANTHROPIC_WORKSPACE_ID
+            or "credit balance" in err.get("message", "").lower())
+
+
 def relevant_player_ids() -> set:
     with db.cursor() as c:
         ids = {r[0] for r in c.execute("SELECT nba_id FROM rosters")}

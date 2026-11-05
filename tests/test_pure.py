@@ -213,3 +213,16 @@ def test_temperature_pulls_toward_half():
 def test_poisson_binomial_win():
     assert model.poisson_binomial_win([0.5, 0.5]) == pytest.approx(0.5)
     assert model.poisson_binomial_win([1.0, 1.0, 0.0]) == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------- claude error retry
+
+def test_claude_credit_error_retries_with_unchanged_key(monkeypatch):
+    from fbb import config, news
+    monkeypatch.setattr(config, "ANTHROPIC_KEY", "test-key-abc123")
+    monkeypatch.setattr(config, "ANTHROPIC_WORKSPACE_ID", "")
+    same = {"key_tail": "abc123", "workspace": ""}
+    credit = "Your credit balance is too low to access the Anthropic API."
+    assert news.claude_error_is_stale({**same, "message": credit})  # a top-up isn't visible locally
+    assert not news.claude_error_is_stale({**same, "message": "invalid x-api-key"})  # waits for a key change
+    assert news.claude_error_is_stale({"key_tail": "old000", "workspace": "", "message": "invalid x-api-key"})

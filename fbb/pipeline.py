@@ -68,8 +68,8 @@ def refresh(daily=False) -> dict:
               if p not in ctx.rostered()][:60]
         db.kv_set("top_free_agents", fa)
         err = db.kv_get("claude_error")
-        if err and (err.get("key_tail") != config.ANTHROPIC_KEY[-6:] or err.get("workspace") != config.ANTHROPIC_WORKSPACE_ID):
-            db.kv_set("claude_error", None)  # settings changed since the failure: try again
+        if err and news.claude_error_is_stale(err):
+            db.kv_set("claude_error", None)  # may be fixed now: try again
         _step(status, "news_extraction", news.extract_events)
         ctx = context(reload=True)  # pick up new news events
 
