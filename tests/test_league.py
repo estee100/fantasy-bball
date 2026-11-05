@@ -431,3 +431,25 @@ def test_buy_low_gaps_are_consistent(ctx):
             mine = owner.get(p) == ctx.my_key
             assert mine == (k in ("sell_high", "hold"))
             assert (p in owner) == (k != "pickups")
+
+
+def test_streams_rank_this_week_and_never_drop_il_players(ctx):
+    from fbb import lineup, recommend, sim
+    R = recommend.streams(ctx)
+    assert R["available"]
+    mine = ctx.rosters[ctx.my_key]
+    slots = sim.team_slots(ctx)[ctx.my_key]
+    il = {p for p in mine if slots.get(p) in lineup.NOT_STARTABLE}
+    rostered, recent = ctx.rostered(), recommend._recent_drops(ctx)
+    gains = [x["week_dwin"] for x in R["streams"]]
+    assert gains == sorted(gains, reverse=True)
+    assert all(g >= recommend.STREAM_MIN_GAIN for g in gains)
+    for x in R["streams"]:
+        assert x["nba_id"] not in rostered and x["nba_id"] not in recent
+        assert x["minutes"] >= recommend.STREAM_MIN_MINUTES
+        assert x["drop"] is None or x["drop"]["nba_id"] not in il
+    # every player you could cut is judged, IL players never are
+    listed = {x["nba_id"] for x in R["drops"]}
+    assert not listed & il
+    assert listed | il | {p for p in mine if recommend.injury_plan(ctx, p) == "il"} >= set(mine) or not R["streams"]
+    assert recommend.streams(ctx) is R  # cached until the context reloads

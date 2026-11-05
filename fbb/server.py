@@ -493,6 +493,12 @@ def buy_low():
     return _json(buylow.scan(pipeline.context()))
 
 
+@app.get("/api/streams")
+def streams():
+    from . import recommend
+    return _json(recommend.streams(pipeline.context()))
+
+
 @app.get("/api/playoffs")
 def playoffs():
     from . import playoffs as po

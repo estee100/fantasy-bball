@@ -219,6 +219,138 @@ def recommend(ctx: sim.Context, n_sims=3000, top=8, seed=11, log=True, budget=No
                      "effective_weeks": B["eff"], "cat_probs": B["base_cats"]}}
 
 
+# Streams: ranked on this week alone, every non-IL player tested as the drop. The suggestions
+# above blend in the rest of the season, which usually outweighs a week, and only test your
+# four weakest as drops, so a good stream rarely surfaces there.
+STREAM_ADDS = 20         # free agents tested, by points his games this week are worth
+STREAM_MIN_MINUTES = 20  # projected minutes: a stream has to actually play
+STREAM_MIN_GAIN = 0.005  # this week's win chance; below this is simulation noise
+STREAM_MAX_SHOWN = 8
+UNSETTLED_GAMES = 4      # fewer games this season and the projection is mostly last season's
+FRESH_NEWS_DAYS = 2
+DROP_MIN_WEEK = 0.02     # win chance this week ...
+DROP_MIN_SEASON = 0.10   # ... or wins over the season: a drop has to gain at least one of these
+
+
+def _stream_adds(ctx, dates) -> tuple:
+    """(instant adds worth testing, how many were skipped for being on waivers). A waiver claim
+    clears too late to count on, so it isn't a stream."""
+    from . import free_agents
+    rostered, recent = ctx.rostered(), _recent_drops(ctx)
+    free, waivers = [], 0
+    for p in ctx.proj.index:
+        if p in rostered or p in recent or not isinstance(ctx.team_of(p), str) or not in_rotation(ctx, p):
+            continue
+        if float(ctx.proj.loc[p, "min"]) < STREAM_MIN_MINUTES:
+            continue
+        if free_agents.availability(p)["status"] == "W":
+            waivers += 1
+            continue
+        free.append(p)
+    worth = lambda p: sum(a for _, a in sim.player_games(ctx, p, dates)) * max(float(ctx.values["value"].get(p, 0)), 0)
+    return sorted(free, key=worth, reverse=True)[:STREAM_ADDS], waivers
+
+
+def _drop_verdict(ctx, m, today) -> tuple:
+    """(verdict, reason) for dropping m["drop"] to add m["add"]."""
+    d = m["drop"]
+    plan = injury_plan(ctx, d)
+    if plan in ("il", "bench"):
+        return "keep", ("he's out, but a free IL slot beats cutting him" if plan == "il"
+                        else "he's only out short-term: bench him")
+    if m["week_dwin"] < DROP_MIN_WEEK and m["season_dwins"] < DROP_MIN_SEASON:
+        return "keep", "the best swap barely helps this week or later"
+    if m["score"] <= 0.01:
+        return "this_week", "helps this week but costs more over the rest of the season"
+    cur = int(ctx.proj.loc[d, "cur_games"]) if d in ctx.proj.index else 0
+    if cur < UNSETTLED_GAMES:
+        return "wait", f"only {cur} game{'' if cur == 1 else 's'} this season, so his projection isn't settled"
+    ev = ctx.events.get(d)
+    if ev and ev.get("direction", 0) < 0 and ev.get("date"):
+        from datetime import date
+        if (date.fromisoformat(today) - date.fromisoformat(str(ev["date"])[:10])).days <= FRESH_NEWS_DAYS:
+            return "wait", f"fresh news: {ev.get('takeaway') or ev['event_type']}"
+    return "drop", "the cheapest way to make room"
+
+
+def streams(ctx, n_sims=2000, seed=11) -> dict:
+    """Best pickups for this week's win chance, and who to drop for them. Read-only: nothing
+    goes in the suggestion ledger. Cached with the context (it reloads on every refresh)."""
+    if "_streams" in ctx._pools:
+        return ctx._pools["_streams"]
+    from datetime import date
+    from . import history, lineup
+    mine = ctx.rosters.get(ctx.my_key, [])
+    if not mine:
+        return {"available": False, "reason": "No roster yet."}
+    B = baseline(ctx, n_sims, seed)
+    dates = B["dates"]
+    today = ctx.today or date.today().isoformat()
+    slots = sim.team_slots(ctx).get(ctx.my_key, {})
+    il = {p for p in mine if slots.get(p) in lineup.NOT_STARTABLE}
+    to_il = [p for p in sorted(mine, key=lambda p: -ros_value(ctx, p))
+             if p not in il and injury_plan(ctx, p) == "il"][:max(0, il_slots() - len(il))]
+    droppable = [p for p in mine if p not in il and p not in to_il]
+    open_spots = max(0, ctx.roster_size - len(droppable))
+    adds, waivers = _stream_adds(ctx, dates)
+
+    swaps = {a: [score_swap(ctx, B, a, d) for d in droppable] for a in adds}
+    no_drop = {a: score_swap(ctx, B, a, None) for a in adds} if open_spots else {}
+
+    pw = model.point_weights()
+    ix = {s: j for j, s in enumerate(sim.SIM_STATS)}
+    points = lambda t: float(sum(t[:, ix[s]] * w for s, w in pw.items() if s in ix).mean())
+    base_pts = points(sim.simulate_team(ctx, mine, dates, n_sims, seed, B["wtd_me"]))
+
+    def games(p):
+        # games still ahead: one already under way can't help anyone you pick up now
+        return [{"date": g, "day": date.fromisoformat(g).strftime("%a")} for g, a in sim.player_games(ctx, p, dates)
+                if a > 0 and sim._share_left(ctx, ctx.team_of(p), g) >= 1.0]
+
+    rows = []
+    for a in adds:
+        m = no_drop.get(a) or max(swaps[a], key=lambda x: x["score"], default=None)
+        if m is None or m["week_dwin"] < STREAM_MIN_GAIN:
+            continue
+        rows.append(m)
+    rows.sort(key=lambda m: -m["week_dwin"])
+    out = []
+    for m in rows[:STREAM_MAX_SHOWN]:
+        a, d = m["add"], m["drop"]
+        new = [p for p in mine if p != d] + [a]
+        verdict, reason = _drop_verdict(ctx, m, today) if d is not None else ("open", "you have an open spot")
+        out.append({"nba_id": int(a), "name": ctx.name(a), "team": ctx.team_of(a),
+                    "per_game": float(ctx.values["value"].get(a, 0)), "minutes": float(ctx.proj.loc[a, "min"]),
+                    "games": games(a), "injury": ctx.injuries.get(a),
+                    "week_dwin": m["week_dwin"], "season_dwins": m["season_dwins"],
+                    "points_added": points(sim.simulate_team(ctx, new, dates, n_sims, seed, B["wtd_me"])) - base_pts,
+                    "drop": None if d is None else {"nba_id": int(d), "name": ctx.name(d), "games": len(games(d)),
+                                                    "verdict": verdict, "reason": reason}})
+
+    # Who to drop: each of your players, with the best swap that would replace him
+    drops = []
+    for d in droppable:
+        opts = [next(m for m in swaps[a] if m["drop"] == d) for a in adds]
+        if not opts:
+            continue
+        m = max(opts, key=lambda x: x["score"])
+        verdict, reason = _drop_verdict(ctx, m, today)
+        drops.append({"nba_id": int(d), "name": ctx.name(d), "team": ctx.team_of(d), "slot": slots.get(d),
+                      "per_game": float(ctx.values["value"].get(d, 0)), "games": len(games(d)),
+                      "injury": ctx.injuries.get(d), "best_add": ctx.name(m["add"]),
+                      "week_dwin": m["week_dwin"], "season_dwins": m["season_dwins"], "score": m["score"],
+                      "verdict": verdict, "reason": reason})
+    order = {"drop": 0, "wait": 1, "this_week": 2, "keep": 3}
+    drops.sort(key=lambda r: (order[r["verdict"]], -r["score"]))
+
+    res = {"available": True, "budget": history.add_budget(ctx), "base_win": B["base_win"], "dates": dates,
+           "open_spots": open_spots, "move_to_il": [ctx.name(p) for p in to_il],
+           "on_waivers": waivers, "streams": out, "drops": drops,
+           "show_points": model.scoring_mode() == "points"}
+    ctx._pools["_streams"] = res
+    return res
+
+
 def evaluate_add(ctx, pid, n_sims=3000, seed=11) -> dict:
     """Should I pick up this specific player, and for whom? Scores him against every player
     you could drop (not just your weakest four), with the same engine as the suggestions."""

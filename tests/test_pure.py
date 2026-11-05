@@ -128,6 +128,14 @@ def test_reddit_and_unknown_publishers_dont_move_the_model():
     assert news.is_credible("ESPN", "anything")
 
 
+def test_news_minutes_boost_is_discounted_and_cuts_are_not():
+    up = {1: {"minutes_multiplier": 1.4, "event_type": "lineup_start"}}
+    down = {1: {"minutes_multiplier": 0.6, "event_type": "lineup_bench"}}
+    assert model.production_multiplier(1, up, {}) == pytest.approx(1.2)
+    assert model.production_multiplier(1, down, {}) == pytest.approx(0.6)
+    assert model.production_multiplier(2, up, {}) == 1.0
+
+
 def test_game_in_progress_counts_only_what_is_left():
     """Yahoo's week-to-date points are live: a game under way is partly in them already."""
     from datetime import datetime, timedelta, timezone

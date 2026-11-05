@@ -91,6 +91,7 @@ async function load() {
   try {
     S = await api("/api/state");
     renderAll();
+    loadStreams();
   } catch (e) {
     $("#updated").textContent = "server unreachable";
     console.error(e);
@@ -1221,6 +1222,51 @@ async function loadBuyLow() {
     `<div class="small muted" style="margin-top:8px">Proj = the model's fantasy pts/game; Seen = this season's average steadied by last season's, roughly what another manager judges by.
       Only the per-minute part of the gap counts: players whose minutes moved more than 6/game since last season are left out (new role, so last season's per-minute numbers don't carry over).
       The bounce back assumes last season repeats; age, a new team or an injury he's playing through can make a slow start real.</div>`;
+  bindPlayerLinks(out);
+}
+
+/* ------------------------------------------------------------------ streams */
+const DROP_VERDICT = {
+  drop: ["OK to drop", "st-good"], open: ["No drop needed", "st-good"],
+  wait: ["Wait", "st-warning"], this_week: ["This week only", "st-warning"], keep: ["Keep", "st-critical"],
+};
+const verdictChip = (v, why) => {
+  const [label, st] = DROP_VERDICT[v];
+  return `<span class="status ${st}" data-tip="${esc(why)}"><span class="dot"></span>${label}</span>`;
+};
+async function loadStreams() {
+  const out = $("#st-out");
+  let R;
+  try { R = await api("/api/streams"); } catch (e) { out.innerHTML = `<div class="small muted">${esc(e.message)}</div>`; return; }
+  if (!R.available) { out.innerHTML = `<div class="small muted">${esc(R.reason)}</div>`; return; }
+  const left = R.budget && R.budget.left != null ? ` · ${R.budget.left} of ${R.budget.limit} adds left` : "";
+  $("#st-sub").textContent = `pickups ranked by this week's win chance (now ${pct(R.base_win, 0)})${left}`;
+  const notes = [];
+  if (R.budget && R.budget.left === 0) notes.push("You've used all your adds this week: these are for reference.");
+  if (R.move_to_il.length) notes.push(`Move ${esc(R.move_to_il.join(", "))} to IL first: that opens a roster spot without a drop.`);
+  if (R.on_waivers) notes.push(`${R.on_waivers} player${R.on_waivers === 1 ? " is" : "s are"} left out for being on waivers: a claim clears too late to count on.`);
+  const pick = R.streams.length ? `<div class="tbl-wrap"><table><thead><tr><th>Pick up</th><th class="r">Proj/g</th><th class="r">Min</th><th>Games left</th>
+      <th class="r" data-tip="Change in this week's win chance from this one move">This week</th>
+      ${R.show_points ? '<th class="r" data-tip="Points your lineup gains this week: extra games only count on days he gets a slot">Points</th>' : ""}
+      <th class="r" data-tip="Expected wins over the rest of the season if you keep him instead of the player dropped">Season</th><th>Drop</th></tr></thead><tbody>${R.streams.map((x) => `
+      <tr><td><a href="#" data-pid="${x.nba_id}">${esc(x.name)}</a> <span class="pteam">${esc(x.team || "")}</span> ${x.injury ? injuryStatus(x.injury) : ""}</td>
+      <td class="r num">${fmt(x.per_game, 1)}</td><td class="r num">${fmt(x.minutes, 0)}</td>
+      <td class="small">${x.games.map((g) => esc(g.day)).join(" ")}</td>
+      <td class="r num delta-up">${signed(x.week_dwin * 100, 1)}%</td>
+      ${R.show_points ? `<td class="r num">${signed(x.points_added, 0)}</td>` : ""}
+      <td class="r num ${x.season_dwins >= 0 ? "delta-up" : "delta-down"}">${signed(x.season_dwins, 2)}</td>
+      <td class="small">${x.drop ? `<a href="#" data-pid="${x.drop.nba_id}">${esc(x.drop.name)}</a> (${x.drop.games}g) ${verdictChip(x.drop.verdict, x.drop.reason)}` : verdictChip("open", "you have an open roster spot")}</td></tr>`).join("")}</tbody></table></div>`
+    : `<div class="small muted">No pickup moves this week's win chance enough to bother.</div>`;
+  const drops = R.drops.length ? `<h3 style="margin:16px 0 4px;font-size:1em">Who to drop <span class="sub small muted">your players, cheapest to lose first, each with his best replacement</span></h3>
+    <div class="tbl-wrap"><table><thead><tr><th>Player</th><th class="r">Proj/g</th><th class="r">Games left</th><th>Verdict</th><th>Best replacement</th><th class="r">This week</th><th class="r">Season</th><th>Why</th></tr></thead><tbody>${R.drops.map((x) => `
+      <tr><td><a href="#" data-pid="${x.nba_id}">${esc(x.name)}</a> <span class="pteam">${esc(x.team || "")}</span> ${x.injury ? injuryStatus(x.injury) : ""}</td>
+      <td class="r num">${fmt(x.per_game, 1)}</td><td class="r num">${x.games}</td>
+      <td>${verdictChip(x.verdict, x.reason)}</td><td class="small">${esc(x.best_add)}</td>
+      <td class="r num ${x.week_dwin >= 0 ? "delta-up" : "delta-down"}">${signed(x.week_dwin * 100, 1)}%</td>
+      <td class="r num ${x.season_dwins >= 0 ? "delta-up" : "delta-down"}">${signed(x.season_dwins, 2)}</td>
+      <td class="small">${esc(x.reason)}</td></tr>`).join("")}</tbody></table></div>` : "";
+  out.innerHTML = (notes.length ? `<div class="small" style="margin-bottom:8px">${notes.join(" ")}</div>` : "") + pick + drops +
+    `<div class="small muted" style="margin-top:8px">Season assumes the drop is permanent: a dropped player goes on waivers and another team can claim him, so it's a real cost even for a one-week stream.</div>`;
   bindPlayerLinks(out);
 }
 

@@ -687,14 +687,16 @@ def team_dist(ctx: Context, pids, dates, per_week=True) -> dict:
             if p not in ctx.proj.index or used[p] <= 0:
                 continue
             row = ctx.proj.loc[p]
-            m = model.production_multiplier(p, ctx.events, ctx.params)
+            # No news multiplier here: this is the next 4 weeks, and a news boost fades within
+            # about 5 games. Carrying it made "Thomas makes first NBA start" (x1.4) worth more
+            # for the season than better players, and put Walker atop the suggestions.
             if k == "_points":
-                pm = m * sum(row[s] * w for s, w in pw.items() if s in row)
+                pm = sum(row[s] * w for s, w in pw.items() if s in row)
                 sd = player_fp_sd(ctx, p)
                 ps = sd * sd if sd is not None else sum((row[s + "_sd"] * w) ** 2 for s, w in pw.items() if s + "_sd" in row)
             else:
                 col = model.cat_column(k)
-                pm, ps = m * row[col], row[col + "_sd"] ** 2
+                pm, ps = row[col], row[col + "_sd"] ** 2
             g, gv = used[p] * scale, nvar[p] * scale
             mu += used_adj[p] * scale * pm   # same games, weighted by the defenses they face
             var += g * ps + gv * pm * pm + (form_sd * g * pm) ** 2

@@ -415,13 +415,21 @@ def ros_availability(pid, injuries, events) -> float:
     return HEALTHY_ROS * {"out": 0.85, "doubtful": 0.92, "questionable": 0.97}.get(status, 0.98)
 
 
+# Share of a news item's promised minutes boost that shows up. Measured Nov 2026 on 16 players
+# (small): promised +25%, actual next 3 games ran +7-20% over the current projection, and it
+# fades to +0-8% by the sixth game. Cuts weren't measurable, so they stand as reported.
+NEWS_BOOST_SHARE = 0.5
+
+
 def production_multiplier(pid, events, params) -> float:
-    """News-driven scaling of counting stats (role/minutes changes), learned per event type."""
+    """News-driven scaling of counting stats (role/minutes changes), learned per event type.
+    For the current week only: it fades within about 5 games, and box scores take over."""
     ev = events.get(pid)
     if not ev:
         return 1.0
     if ev["minutes_multiplier"]:
-        return float(np.clip(ev["minutes_multiplier"], 0.3, 1.6))
+        m = float(np.clip(ev["minutes_multiplier"], 0.3, 1.6))
+        return 1 + NEWS_BOOST_SHARE * (m - 1) if m > 1 else m
     learned = params.get("news_multipliers", {}).get(ev["event_type"])
     return float(learned) if learned else 1.0
 
