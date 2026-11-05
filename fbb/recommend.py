@@ -309,7 +309,9 @@ def streams(ctx, n_sims=2000, seed=11) -> dict:
 
     rows = []
     for a in adds:
-        m = no_drop.get(a) or max(swaps[a], key=lambda x: x["score"], default=None)
+        # pair him with a drop you can make now; a player marked Wait only if there's no other
+        ready = [x for x in swaps[a] if _drop_verdict(ctx, x, today)[0] == "drop"]
+        m = no_drop.get(a) or max(ready or swaps[a], key=lambda x: x["score"], default=None)
         if m is None or m["week_dwin"] < STREAM_MIN_GAIN:
             continue
         rows.append(m)

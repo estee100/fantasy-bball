@@ -1240,7 +1240,7 @@ async function loadStreams() {
   try { R = await api("/api/streams"); } catch (e) { out.innerHTML = `<div class="small muted">${esc(e.message)}</div>`; return; }
   if (!R.available) { out.innerHTML = `<div class="small muted">${esc(R.reason)}</div>`; return; }
   const left = R.budget && R.budget.left != null ? ` · ${R.budget.left} of ${R.budget.limit} adds left` : "";
-  $("#st-sub").textContent = `pickups ranked by this week's win chance (now ${pct(R.base_win, 0)})${left}`;
+  $("#st-sub").textContent = `pickups ranked by this week's win chance${left}`;
   const notes = [];
   if (R.budget && R.budget.left === 0) notes.push("You've used all your adds this week: these are for reference.");
   if (R.move_to_il.length) notes.push(`Move ${esc(R.move_to_il.join(", "))} to IL first: that opens a roster spot without a drop.`);
