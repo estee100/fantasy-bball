@@ -520,7 +520,7 @@ _game_sd_cache = {}
 
 def game_value_sd(logs: pd.DataFrame) -> float:
     """Typical single-game spread of value: median per-player std over recent games."""
-    key = (len(logs), scoring_mode())
+    key = (db.current_league(), len(logs), scoring_mode())  # scale differs by league
     if key not in _game_sd_cache:
         recent = logs.sort_values("game_date").groupby("nba_id").tail(30)
         lv = line_values(recent)

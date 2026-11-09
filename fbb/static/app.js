@@ -52,11 +52,28 @@ document.addEventListener("DOMContentLoaded", () => {
   initCheckPicker();
   initTrade();
   initTips();
-  load();
+  initDraft();
+  initLeagues().finally(load);  // header needs to know whether the switcher is shown
   setInterval(load, 60_000);
   let h = location.hash.slice(1);
   if (h) showTab(h);
 });
+
+/* League switcher: the server reads the cookie on every request, so every fetch (including
+   the raw ones that skip api()) follows the chosen league. Only shown with 2+ leagues. */
+async function initLeagues() {
+  let d;
+  try { d = await api("/api/leagues"); } catch (e) { return; }
+  const sel = $("#league-pick");
+  if (d.leagues.length < 2) return;
+  sel.innerHTML = d.leagues.map((l) => `<option value="${esc(l.id)}"${l.id === d.current ? " selected" : ""}>${esc(l.name)}</option>`).join("");
+  sel.classList.remove("hidden");
+  document.body.classList.add("multi-league");
+  sel.addEventListener("change", () => {
+    document.cookie = `fbb_league=${encodeURIComponent(sel.value)}; path=/; max-age=31536000; samesite=lax`;
+    location.reload();
+  });
+}
 
 function initTheme() {
   let t = null;
@@ -78,6 +95,7 @@ function showTab(tab) {
   $$("nav.tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
   $$("section[data-panel]").forEach((s) => s.classList.toggle("hidden", s.dataset.panel !== tab));
   history.replaceState(null, "", "#" + tab);
+  if (tab === "draft") loadDraft();
   if (tab === "news") loadNews();
   if (tab === "learning") loadLearning();
   if (tab === "setup") loadSetup();
@@ -130,7 +148,7 @@ function renderHeader() {
   const L = S.league;
   const [ws, we] = L.week_range || [];
   $("#league-meta").innerHTML = `
-    <span><b>${esc(L.name || "League")}</b></span>
+    ${document.body.classList.contains("multi-league") ? "" : `<span><b>${esc(L.name || "League")}</b></span>`}
     <span>Week ${esc(L.week)} · ${esc(shortDate(ws))}–${esc(shortDate(we))}</span>
     <span><b>${esc(L.me || "You")}</b> vs <b>${esc(L.opponent || "—")}</b></span>`;
   $("#updated").textContent = "Updated " + ago(S.last_refresh);
@@ -1318,4 +1336,170 @@ async function loadModelTeam() {
     ${weeks ? `<div class="tbl-wrap"><table><thead><tr><th>Week of</th><th>Opponent</th><th class="r">Model</th><th class="r">You</th><th class="r">Opponent</th><th class="r">Model − you</th></tr></thead><tbody>${weeks}</tbody></table></div>` : '<div class="small muted">No finished days yet: the first scores appear the morning after its first games.</div>'}
     ${moves ? `<h3 style="margin:14px 0 6px;font-size:1em">Its moves</h3><div class="tbl-wrap"><table><thead><tr><th>Day</th><th>Move</th><th>Players</th><th>Since then</th><th></th></tr></thead><tbody>${moves}</tbody></table></div>` : ""}
     <div class="small muted" style="margin-top:8px">A scoreboard, not something the model learns from. Its paper claims always succeed and it never trades; your score uses your recorded lineups (or the best lineup by projection on days you didn't record one). One season of one team is noisy: read the record as a rough signal.</div>`;
+}
+
+/* ------------------------------------------------------------------ draft */
+let D = null, draftTimer = null;
+
+function initDraft() {
+  $("#draft-q").addEventListener("input", renderDraftBoard);
+  $("#draft-pos").addEventListener("change", renderDraftBoard);
+  $("#draft-undo").addEventListener("click", () => draftAct(() => api("/api/draft/pick", { method: "DELETE" })));
+  $("#draft-reset").addEventListener("click", () => {
+    if (confirm("Start over? Clears every pick recorded here (Yahoo's picks stay).")) draftAct(() => api("/api/draft/reset", { method: "POST" }));
+  });
+  $("#draft-live").addEventListener("change", (e) => {
+    clearInterval(draftTimer);
+    if (e.target.checked) { draftLiveTick(); draftTimer = setInterval(draftLiveTick, 8000); }
+  });
+}
+
+async function draftLiveTick() {
+  try { await api("/api/draft/sync", { method: "POST" }); } catch (e) { $("#draft-status").textContent = e.message; }
+  await loadDraft();
+}
+
+async function draftAct(fn) {
+  try { await fn(); } catch (e) { alert(e.message); }
+  await loadDraft();
+}
+
+async function loadDraft() {
+  try { D = await api("/api/draft"); } catch (e) { $("#draft-clock").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  renderDraftClock(); renderDraftTeam(); renderDraftBoard(); renderDraftSettings(); renderDraftPicks();
+}
+
+function draftWhen(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000), h = (d - Date.now()) / 3600e3;
+  const when = d.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return h > 0 ? `${when} (in ${h >= 48 ? Math.round(h / 24) + " days" : h >= 1 ? Math.round(h) + " h" : Math.round(h * 60) + " min"})` : when;
+}
+
+function draftPickBtn(root) {
+  $$("[data-dpick]", root).forEach((b) => b.addEventListener("click", () =>
+    draftAct(() => api("/api/draft/pick", { method: "POST", body: JSON.stringify({ nba_id: +b.dataset.dpick }) }))));
+}
+
+function renderDraftClock() {
+  const s = D.settings, c = D.on_clock, y = D.yahoo || {};
+  const mode = s.mode === "mock" ? "Mock draft: the other 11 teams pick on their own, you take your picks with Draft"
+    : y.status === "predraft" ? "Draft " + draftWhen(y.time) : y.status === "postdraft" ? "Draft complete" : "Draft in progress";
+  $("#draft-status").textContent = mode;
+  $("#draft-live").closest("label").classList.toggle("hidden", s.mode === "mock");   // nothing to follow in a mock
+  const el = $("#draft-clock");
+  if (D.done) { el.innerHTML = `<div class="empty">All ${D.picks.length} picks are in.</div>`; return; }
+  let head = `<div class="draft-now"><span class="big num">Pick ${c.pick}</span><span class="muted">Round ${c.round} · slot ${c.slot}${c.team ? " · " + esc(c.team) : ""}</span>`;
+  if (!s.my_slot) head += `<span class="status st-warning"><span class="dot"></span>Set your pick slot in Draft settings (Yahoo hasn't set the order yet)</span>`;
+  else if (c.mine) head += `<span class="chip mine">You're up</span>`;
+  else head += `<span class="ink2">Your next pick: #${D.my_upcoming[0] ?? "—"} (${c.picks_until_mine} pick${c.picks_until_mine === 1 ? "" : "s"} away)</span>`;
+  head += `</div>`;
+  let body = "";
+  if (D.suggestion) {
+    body = `<div class="small muted" style="margin:8px 0 4px">Score = value now + the best player likely left at your next pick (${esc(D.units)} over the rest of the season, above replacement)${D.must_fill ? ". Only players who fill an open starting slot: your remaining picks are needed for them" : ""}.</div>
+      <div class="table-scroll"><table><thead><tr><th>Take</th><th class="r">VOR</th><th class="r">Best left next time</th><th class="r">Score</th><th class="r" title="Chance he's still there at your next pick if you pass">Back if you pass</th><th></th></tr></thead><tbody>
+      ${D.suggestion.map((x, i) => `<tr${i === 0 ? ' class="draft-best"' : ""}><td><a href="#" class="pname" data-pid="${x.nba_id}">${esc(x.name)}</a></td>
+        <td class="r num">${fmt(x.vor, 0)}</td><td class="r num">${x.next_best == null ? "–" : fmt(x.next_best, 0)}</td><td class="r num"><b>${fmt(x.score, 0)}</b></td>
+        <td class="r num">${x.p_back == null ? "–" : pct(x.p_back)}</td>
+        <td class="r"><button class="btn small primary" data-dpick="${x.nba_id}">Draft</button></td></tr>`).join("")}</tbody></table></div>
+      <div class="small ink2" style="margin-top:6px">${draftWhy(D.suggestion)}</div>`;
+  } else if (s.auction) {
+    body = `<div class="small muted" style="margin-top:8px">Auction: the board's $ column is each player's share of the league's money by value above replacement. Bid up to it.</div>`;
+  } else if (s.my_slot && D.board.length) {
+    const t = D.board.filter((r) => !r.avoid && r.p_next != null && r.p_next >= 0.5).slice(0, 5);
+    body = `<div class="small muted" style="margin:8px 0 4px">Best players likely still there at your next pick:</div>${t.map((r) => `<span class="chip">${esc(r.name)} · ${pct(r.p_next)}</span>`).join(" ") || '<span class="small muted">none above 50%</span>'}`;
+  }
+  el.innerHTML = head + body;
+  bindPlayerLinks(el);
+  draftPickBtn(el);
+}
+
+function draftWhy(all) {
+  const top = all[0];
+  if (!top) return "";
+  const best = [...all].sort((a, b) => b.vor - a.vor)[0];
+  if (top.p_back === 1) {   // back-to-back picks at the turn of the snake
+    const second = all.find((x) => x.nba_id !== top.nba_id);
+    return `You pick again right away: take ${esc(top.name)}${second ? ` and ${esc(second.name)}` : ""}, in either order.`;
+  }
+  if (best.nba_id === top.nba_id || best.p_back == null) return `${esc(top.name)} is the most valuable player left.`;
+  return `${esc(best.name)} is worth ${fmt(best.vor - top.vor, 0)} more, but ${pct(best.p_back)} to be back at your next pick vs ${pct(top.p_back)} for ${esc(top.name)}: taking ${esc(top.name)} now keeps a good shot at ${esc(best.name)} next time.`;
+}
+
+function renderDraftTeam() {
+  $("#draft-slots").textContent = `${D.slots_filled} of ${D.slots_total} starting slots covered`;
+  const el = $("#draft-team");
+  if (!D.my_team.length) { el.innerHTML = `<div class="empty">No picks yet.</div>`; return; }
+  el.innerHTML = `<table><thead><tr><th>Player</th><th>Pos</th><th class="r">${D.units === "fantasy pts" ? "FP/G" : "Value/G"}</th><th class="r">Rest of season</th></tr></thead><tbody>
+    ${D.my_team.map((p) => `<tr><td><a href="#" class="pname" data-pid="${p.nba_id}">${esc(p.name)}</a></td><td>${esc(p.pos)}</td><td class="r num">${fmt(p.per_game, 1)}</td><td class="r num">${fmt(p.ros, 0)}</td></tr>`).join("")}
+    </tbody></table>`;
+  bindPlayerLinks(el);
+}
+
+function renderDraftBoard() {
+  if (!D) return;
+  const q = $("#draft-q").value.toLowerCase(), pos = $("#draft-pos").value, auction = D.settings.auction;
+  const rows = D.board.filter((r) => (!q || r.name.toLowerCase().includes(q)) && (!pos || r.pos.split("/").includes(pos))).slice(0, 200);
+  $("#draft-board-sub").textContent = `${D.units} over the rest of the season (${D.games_left} team games left) · replacement level ${D.replacement}`;
+  const pcell = (p) => p == null ? `<td class="r muted">–</td>` : `<td class="r num ${p >= 0.6 ? "delta-up" : p < 0.25 ? "delta-down" : ""}">${pct(p)}</td>`;
+  const unit = D.units === "fantasy pts" ? "FP/G" : "Val/G";
+  const el = $("#draft-board");
+  el.innerHTML = `<thead><tr><th class="r">#</th><th>Player</th><th>Pos</th><th class="r">${unit}</th><th class="r" title="Expected games played for the rest of the season">Games</th>
+    <th class="r" title="Rest-of-season value above the last player who'd be drafted">VOR</th>${auction ? '<th class="r">$</th>' : ""}<th class="r" title="Yahoo's rank: what the other managers see">Yahoo</th><th class="r" title="Yahoo average draft position">ADP</th>
+    <th class="r" title="Chance he's still there at your next pick">Next pick</th><th class="r" title="... and at the one after">After</th><th></th></tr></thead><tbody>
+    ${rows.map((r) => `<tr class="${r.avoid ? "muted" : ""}"><td class="r num muted">${r.model_rank}</td>
+      <td><a href="#" class="pname" data-pid="${r.nba_id}">${esc(r.name)}</a><span class="pteam">${esc(r.team)}</span>
+        ${r.injury ? `<span class="status st-warning" title="${esc(r.injury)}"><span class="dot"></span></span>` : ""}${r.take ? ' <span class="chip">your take</span>' : ""}${r.avoid ? ' <span class="chip">avoid</span>' : ""}</td>
+      <td class="small">${esc(r.pos)}</td><td class="r num">${fmt(r.per_game, 1)}</td><td class="r num">${fmt(r.games, 0)}</td><td class="r num"><b>${fmt(r.vor, 0)}</b></td>
+      ${auction ? `<td class="r num">${r.dollars == null ? "–" : "$" + r.dollars}</td>` : ""}
+      <td class="r num muted">${r.yahoo_rank ?? "–"}</td><td class="r num muted">${r.adp == null ? "–" : fmt(r.adp, 1)}</td>${pcell(r.p_next)}${pcell(r.p_after)}
+      <td class="r nowrap"><button class="btn small" data-dpick="${r.nba_id}" title="Record him as the next pick (whoever is on the clock)">Draft</button>
+        <button class="btn ghost small" data-davoid="${r.nba_id}" title="${r.avoid ? "Allow again" : "Never suggest him"}">${r.avoid ? "↺" : "✕"}</button></td></tr>`).join("")}</tbody>`;
+  bindPlayerLinks(el);
+  draftPickBtn(el);
+  $$("[data-davoid]", el).forEach((b) => b.addEventListener("click", () => {
+    const id = +b.dataset.davoid, cur = new Set(D.settings.avoid || []);
+    cur.has(id) ? cur.delete(id) : cur.add(id);
+    draftAct(() => api("/api/draft/settings", { method: "POST", body: JSON.stringify({ changes: { avoid: [...cur] } }) }));
+  }));
+}
+
+function renderDraftSettings() {
+  const s = D.settings, src = s.sources || {};
+  const tag = (k) => src[k] && src[k] !== "you" ? `<span class="muted small">${esc(String(s[k] ?? ""))} from ${esc(src[k])}</span>` : "";
+  const sel = (k, opts, cur = String(s[k])) => `<select class="btn" data-dset="${k}">${opts.map(([v, l]) => `<option value="${v}"${cur === v ? " selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+  const num = (k, min, max) => `<input type="number" data-dset="${k}" min="${min}" max="${max}" value="${src[k] === "you" ? s[k] ?? "" : ""}" placeholder="auto">`;
+  const auctionCur = src.auction === "you" ? String(s.auction) : "";
+  $("#draft-settings").innerHTML = `<div class="draft-form">
+    <label>Mode</label><div>${sel("mode", [["live", "Live: picks from Yahoo"], ["mock", "Mock: practice, others pick automatically"]])}</div>
+    <label>Teams</label><div>${num("num_teams", 2, 20)} ${tag("num_teams")}</div>
+    <label>Your pick slot</label><div>${num("my_slot", 1, s.num_teams)} ${tag("my_slot")}</div>
+    <label>Rounds</label><div>${num("rounds", 1, 30)} ${tag("rounds")}</div>
+    <label>Order</label><div>${sel("order", [["snake", "Snake"], ["linear", "Same order every round"]])}</div>
+    <label>Auction</label><div>${sel("auction", [["", "From Yahoo (" + (D.yahoo.auction ? "yes" : "no") + ")"], ["true", "Yes"], ["false", "No"]], auctionCur)}</div>
+    ${s.auction ? `<label>Budget</label><div><input type="number" data-dset="budget" min="1" max="1000" value="${s.budget}"></div>` : ""}
+    <label>Others draft by</label><div>${sel("opponents", [["yahoo", "Yahoo's rank (their draft room)"], ["adp", "Yahoo ADP"], ["model", "This model's ranking"]])}</div>
+    <label>Predictability</label><div><input type="range" data-dset="randomness" min="0" max="1" step="0.05" value="${s.randomness}"> <span class="small muted">${s.randomness <= 0.15 ? "follow the ranking closely" : s.randomness >= 0.5 ? "very unpredictable" : "some reaching"}</span></div>
+    <label>Injuries</label><div>${sel("injuries", [["true", "Discount games they'll miss"], ["false", "Ignore: per-game value only"]])}</div>
+  </div>
+  <div class="small muted" style="margin-top:8px">${s.avoid?.length ? `${s.avoid.length} player${s.avoid.length > 1 ? "s" : ""} on your avoid list (✕ on the board). ` : ""}Your takes (player detail → Your take) change the board too.</div>`;
+  $$("[data-dset]", $("#draft-settings")).forEach((x) => x.addEventListener("change", () => {
+    const k = x.dataset.dset;
+    let v = x.value;
+    if (x.type === "number") v = v === "" ? null : +v;
+    else if (x.type === "range") v = +v;
+    else if (k === "auction") v = v === "" ? null : v === "true";
+    else if (k === "injuries") v = v === "true";
+    draftAct(() => api("/api/draft/settings", { method: "POST", body: JSON.stringify({ changes: { [k]: v } }) }));
+  }));
+}
+
+function renderDraftPicks() {
+  $("#draft-picks-sub").textContent = `${D.picks.length} of ${D.settings.num_teams * D.settings.rounds}`;
+  const el = $("#draft-picks");
+  if (!D.picks.length) { el.innerHTML = `<div class="empty">No picks yet.</div>`; return; }
+  el.innerHTML = `<table><tbody>${[...D.picks].reverse().map((p) => `<tr class="${p.mine ? "draft-mine" : ""}"><td class="num muted">${p.round}.${String((p.pick - 1) % D.settings.num_teams + 1).padStart(2, "0")}</td>
+    <td>${p.nba_id != null ? `<a href="#" class="pname" data-pid="${p.nba_id}">${esc(p.name)}</a>` : esc(p.name)}</td><td class="small muted">${esc(p.team)}</td>
+    <td class="small muted">${p.source === "yahoo" ? "Yahoo" : p.source === "sim" ? "simulated" : "you"}${p.cost != null ? " · $" + p.cost : ""}</td></tr>`).join("")}</tbody></table>`;
+  bindPlayerLinks(el);
 }

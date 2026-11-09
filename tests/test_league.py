@@ -323,7 +323,6 @@ def test_model_team_respects_add_limit_and_ownership(ctx, monkeypatch):
     monkeypatch.setattr(shadow, "_daily_due", lambda *a: True)   # not dependent on the clock
     me = ctx.rosters[ctx.my_key]
     shadow.start(list(me), [], "2026-10-26")
-    shadow._ensure()
     with db.cursor() as c:   # 4 adds already used this week
         for i in range(4):
             c.execute("INSERT INTO shadow_moves(created, day, kind, add_id, status) VALUES (?,?,?,?,?)",

@@ -25,21 +25,6 @@ MAX_ADDS_WEEK = 4
 MOVE_LABELS = {"Do today", "Worth doing", "Waiver claim"}
 MIN_OPEN_SPOT_GAIN = 0.02
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS shadow_days (
-    day TEXT PRIMARY KEY, starters TEXT, opp_key TEXT, points REAL, scored INTEGER DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS shadow_moves (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, day TEXT, kind TEXT,
-    add_id INTEGER, drop_id INTEGER, status TEXT, until TEXT, score REAL, reason TEXT
-);
-"""
-
-
-def _ensure():
-    with db.cursor() as c:
-        c.executescript(SCHEMA)
-
 
 def state() -> dict | None:
     return db.kv_get("shadow_state")
@@ -51,7 +36,6 @@ def _save(s):
 
 def start(roster: list, il: list, day: str) -> dict:
     """Fork the model team from a roster (active players + IL), effective `day`."""
-    _ensure()
     il = list(dict.fromkeys(int(p) for p in il))
     roster = [p for p in dict.fromkeys(int(p) for p in roster) if p not in il]
     s = {"started": day, "roster": roster, "il": il, "pending": [], "last_daily": None}
@@ -120,7 +104,6 @@ def _out(ctx, p) -> bool:
 
 def daily(ctx, today=None) -> dict:
     """Once a day, before games: claims that cleared, IL, then at most one move."""
-    _ensure()
     s = state()
     today = today or date.today().isoformat()
     if not s or today < s["started"] or s.get("last_daily") == today:
@@ -235,7 +218,6 @@ def _execute(ctx, s, today, add, drop, score, reason) -> str:
 
 def plan_lineup(ctx, now=None) -> list | None:
     """Today's lineup, re-planned each refresh until the day's first tip-off, then frozen."""
-    _ensure()
     s = state()
     today = date.today().isoformat()
     if not s or today < s["started"]:
@@ -262,7 +244,6 @@ def plan_lineup(ctx, now=None) -> list | None:
 
 def score_days(ctx) -> int:
     """Points for every finished day (box scores in)."""
-    _ensure()
     today = date.today().isoformat()
     n = 0
     with db.cursor() as c:
@@ -288,7 +269,6 @@ def tick(ctx) -> dict:
 
 def report(ctx) -> dict:
     """Weekly record of the model team vs yours, against your real opponents, plus its moves."""
-    _ensure()
     s = state()
     if not s:
         return {"started": False}

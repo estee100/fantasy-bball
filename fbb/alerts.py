@@ -85,8 +85,10 @@ def _mark(key: str):
 
 
 def _once(key: str, title: str, message: str, **kw) -> bool:
-    if key in _sent():
+    if key in _sent():   # per league: the same lineup or news alert can be due in each
         return False
+    if len(db.league_ids()) > 1:
+        title = f"[{db.league_name(db.current_league())}] {title}"
     if send(title, message, **kw):
         _mark(key)
         return True

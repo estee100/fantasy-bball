@@ -33,9 +33,11 @@ async def lifespan(app):
 
 def _now_if_stale():
     from datetime import datetime, timezone
-    last = db.kv_get("last_refresh")
-    if not last or (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() > REFRESH_MINUTES * 60:
-        return datetime.now()
+    for lid in db.league_ids():   # any league behind: refresh now
+        with db.use_league(lid):
+            last = db.kv_get("last_refresh")
+        if not last or (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() > REFRESH_MINUTES * 60:
+            return datetime.now()
     return None
 
 
@@ -66,6 +68,20 @@ def _clean_nan(o):
     if hasattr(o, "item"):
         return _clean_nan(o.item())
     return o
+
+
+LEAGUE_COOKIE = "fbb_league"
+
+
+@app.middleware("http")
+async def _league_scope(request, call_next):
+    """Every request runs against one league: ?league=<id>, else the dashboard's cookie, else
+    the first configured league. An unknown id falls back to the default rather than creating
+    an empty league file."""
+    ids = db.league_ids()
+    lid = request.query_params.get("league") or request.cookies.get(LEAGUE_COOKIE)
+    with db.use_league(lid if lid in ids else ids[0]):
+        return await call_next(request)
 
 
 @app.middleware("http")
@@ -113,6 +129,12 @@ def _player_row(ctx, pid, dates, slot=None):
     return row
 
 
+@app.get("/api/leagues")
+def leagues():
+    return {"current": db.current_league(),
+            "leagues": [{"id": lid, "name": db.league_name(lid)} for lid in db.league_ids()]}
+
+
 @app.get("/api/state")
 def state():
     ctx = pipeline.context()
@@ -130,7 +152,7 @@ def state():
     mine = sorted(ctx.rosters.get(ctx.my_key, []), key=lambda p: -ctx.values["var"].get(p, -99))
     opp = sorted(ctx.rosters.get(ctx.opp_key, []), key=lambda p: -ctx.values["var"].get(p, -99))
     return _json({
-        "league": {"name": db.kv_get("league_name"), "source": db.kv_get("league_source"),
+        "league": {"id": db.current_league(), "name": db.kv_get("league_name"), "source": db.kv_get("league_source"),
                    "week": ctx.week, "week_range": [ctx.week_start, ctx.week_end],
                    "categories": [{"key": k, "label": config.CATEGORY_DEFS[k][0],
                                    "higher": config.CATEGORY_DEFS[k][4]} for k in ctx.cats],
@@ -140,7 +162,7 @@ def state():
                    "weeks_remaining": ctx.weeks_remaining},
         "last_refresh": db.kv_get("last_refresh"),
         "readiness": pipeline.readiness(),
-        "pipeline": db.kv_get("pipeline_status", {}),
+        "pipeline": {**db.kv_get("shared_status", {}), **db.kv_get("pipeline_status", {})},
         "matchup": db.kv_get("matchup"),
         "recommendations": db.kv_get("recommendations"),
         "start_sit": db.kv_get("start_sit", []),
@@ -294,7 +316,7 @@ def _rerun():
     """Re-run the model after a change (in the background: takes a few seconds)."""
     import threading
     pipeline.context(reload=True)
-    threading.Thread(target=pipeline.refresh, daemon=True).start()
+    threading.Thread(target=pipeline.refresh, kwargs={"leagues": [db.current_league()]}, daemon=True).start()
 
 
 # ---------------------------------------------------------------- watchlist
@@ -459,32 +481,39 @@ def alerts_test():
 
 # ---------------------------------------------------------------- trade finder (runs in the background)
 
-_trade_job = {"running": False, "done": 0, "total": 0, "result": None, "error": None, "at": None}
+_trade_jobs: dict = {}   # league id -> job
+
+
+def _trade_job() -> dict:
+    return _trade_jobs.setdefault(db.current_league(), {"running": False, "done": 0, "total": 0,
+                                                        "result": None, "error": None, "at": None})
 
 
 @app.post("/api/trades/find")
 def trades_find():
     import threading
     from . import trades
-    if _trade_job["running"]:
+    job = _trade_job()
+    if job["running"]:
         return {"running": True}
 
     def work():
-        _trade_job.update(running=True, done=0, total=0, error=None)
+        job.update(running=True, done=0, total=0, error=None)
         try:
-            res = trades.find(pipeline.context(), progress=lambda d, t: _trade_job.update(done=d, total=t))
-            _trade_job.update(result=res, at=db.now_iso())
+            res = trades.find(pipeline.context(), progress=lambda d, t: job.update(done=d, total=t))
+            job.update(result=res, at=db.now_iso())
         except Exception as e:  # surface it in the UI instead of failing silently
-            _trade_job["error"] = f"{type(e).__name__}: {e}"
+            job["error"] = f"{type(e).__name__}: {e}"
         finally:
-            _trade_job["running"] = False
-    threading.Thread(target=work, daemon=True).start()
+            job["running"] = False
+    job["running"] = True   # before the thread starts, so a double click can't launch two
+    threading.Thread(target=db.bound(work), daemon=True).start()
     return {"running": True}
 
 
 @app.get("/api/trades/find")
 def trades_status():
-    return _json(_trade_job)
+    return _json(_trade_job())
 
 
 @app.get("/api/buy-low")
@@ -509,6 +538,75 @@ def playoffs():
 def add_limit_get():
     from . import history
     return _json(history.add_budget(pipeline.context()))
+
+
+# ---------------------------------------------------------------- draft
+
+class DraftCfgIn(BaseModel):
+    changes: dict
+
+
+class DraftPickIn(BaseModel):
+    nba_id: int
+    pick: int | None = None
+
+
+@app.get("/api/draft")
+def draft_get():
+    from . import draft
+    return _json(draft.board())
+
+
+@app.post("/api/draft/settings")
+def draft_settings(c: DraftCfgIn):
+    from . import draft
+    try:
+        out = draft.save_settings(c.changes)
+        draft.advance()   # mock: other teams pick up to your turn
+        return _json(out)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/draft/pick")
+def draft_pick(p: DraftPickIn):
+    from . import draft
+    try:
+        out = draft.add_pick(p.nba_id, p.pick)
+        draft.advance()
+        return out
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/draft/pick")
+def draft_undo(pick: int | None = None):
+    from . import draft
+    try:
+        return draft.undo_pick(pick)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/draft/reset")
+def draft_reset():
+    from . import draft
+    draft.reset()
+    draft.advance()
+    return {"ok": True}
+
+
+@app.post("/api/draft/sync")
+def draft_sync():
+    """Live draft: pull picks from Yahoo now (the dashboard polls this while the draft runs)."""
+    from . import draft
+    if not config.yahoo_authorized():
+        raise HTTPException(400, "Yahoo isn't connected: use mock mode and enter picks yourself")
+    try:
+        y = draft.sync_yahoo()
+    except Exception as e:
+        raise HTTPException(502, f"Yahoo: {type(e).__name__}: {e}")
+    return {"synced": y.get("synced"), "picks": len(y.get("picks", []))}
 
 
 # ---------------------------------------------------------------- the model's own team

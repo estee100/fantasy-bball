@@ -35,6 +35,40 @@ so everything works before you connect.
 4. Optional: set `ANTHROPIC_API_KEY` so news and scouting reports are read by Claude
    (otherwise a keyword tagger handles news and scouting ingestion is off).
 
+### More than one league
+
+Put every league ID in `YAHOO_LEAGUE_ID`, comma-separated, then run `python -m fbb sync` (one
+Yahoo login covers all of them). The dashboard gets a league picker in the header. NBA data,
+news and injuries are downloaded once and shared. Each league keeps its own rosters, moves,
+forecasts, takes, watchlist and tuned settings in `data/leagues/<id>.db`; a new league starts
+from an existing league's tuning until its own first daily tune. CLI commands run every league
+unless you pass `--league <id>` (e.g. `python -m fbb --league 312045 sync`). Phone alerts are
+prefixed with the league name.
+
+Upgrading from a single-league install moves the league's data out of `data/fbb.db` into its
+league file automatically on first start (a backup is written to `data/backups/` first).
+Restart the server after updating so no old process keeps writing to the old layout.
+
+### Draft
+
+The Draft tab is a big board plus a pick tracker:
+
+- **Ranking**: rest-of-season value (per-game value × expected games left, after injuries and
+  rest), minus replacement level (the last player who'd be drafted). Your takes count.
+- **Next pick / After**: the chance each player is still there at your next two picks, from a
+  few hundred simulated drafts where the other managers pick off Yahoo's rank with some noise.
+- **Suggestion** (when you're on the clock): value now + the best player likely left at your
+  next pick. It takes the player who won't last over a slightly better one who will. Late in
+  the draft it only suggests players who fill an empty starting slot.
+- **Settings** (all optional, blank = Yahoo/league): live or mock mode, teams, your slot,
+  rounds, snake or linear, auction and budget, how the others pick (Yahoo rank, ADP, or this
+  model), how predictable they are, and whether injuries discount value. ✕ on the board keeps
+  a player out of suggestions.
+
+Live mode reads the order and picks from Yahoo (tick *Follow Yahoo live* during the draft to
+poll every 8 s; *Draft* fills in a pick Yahoo hasn't reported yet). Mock mode ignores Yahoo:
+you record every pick, *Undo* and *Reset* work on those.
+
 The app is **read-only** against Yahoo. It recommends moves; you make them in the Yahoo app,
 and the next sync reads them from Yahoo's transaction log (exact times, every team) and logs
 yours to History, linked to the suggestion if you followed one. Rosters, lineup slots, waivers,
@@ -99,4 +133,4 @@ fbb/
 python -m pytest -q
 ```
 
-Tests that need data run on a temporary copy of `data/fbb.db`, never the real one.
+Tests that need data run on a temporary copy of `data/fbb.db` and `data/leagues/`, never the real ones.

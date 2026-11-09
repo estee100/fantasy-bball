@@ -297,3 +297,23 @@ select.btn { padding: 4px 6px; border: 1px solid var(--border); border-radius: 6
 .seg button { border: 0; background: var(--surface); padding: 5px 10px; cursor: pointer; font-size: 12px; }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
 .take-badge { font-size: 10px; font-weight: 700; color: var(--opp); border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; margin-left: 4px; vertical-align: 1px; }
+
+.league-pick { max-width: 220px; font-weight: 600; }
+
+/* ------------------------------------------------------------------ draft */
+.draft-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.draft-filters { display: flex; gap: 8px; }
+.draft-filters input { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; min-width: 0; width: 160px; }
+.draft-now { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.draft-now .big { font-size: 22px; font-weight: 700; }
+.draft-best td, .draft-mine td { background: color-mix(in srgb, var(--me) 8%, transparent); }
+.draft-board-wrap { max-height: 70vh; overflow: auto; }
+.draft-board-wrap thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.draft-log { max-height: 360px; overflow: auto; }
+.draft-form { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 12px; align-items: center; font-size: 13px; }
+.draft-form label { color: var(--muted); font-size: 12px; }
+.draft-form input[type=number] { width: 72px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; }
+.draft-form select { max-width: 100%; }
+.nowrap { white-space: nowrap; }
+.table-scroll { overflow-x: auto; }
+@media (max-width: 520px) { .draft-filters input { width: 110px; } }

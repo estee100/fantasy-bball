@@ -22,20 +22,6 @@ from . import config, db, learning, model
 HORIZON_DAYS = {"trade": 28}
 DEFAULT_HORIZON = 21
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, effective TEXT, kind TEXT,
-    team_key TEXT, other_key TEXT, players_in TEXT, players_out TEXT,
-    source TEXT, note TEXT, move_id INTEGER, yahoo_key TEXT UNIQUE,
-    prediction TEXT, eval TEXT, evaluated_at TEXT, deleted INTEGER DEFAULT 0
-);
-"""
-
-
-def _ensure():
-    with db.cursor() as c:
-        c.executescript(SCHEMA)
-
 
 def _unit():
     return "fantasy pts" if model.scoring_mode() == "points" else "value"
@@ -95,7 +81,6 @@ def record(ctx, kind: str, ins: list, outs: list, effective: str | None = None, 
            source="yahoo", note="", move_id=None, yahoo_key=None, moves_logged=False) -> int:
     """Log a roster change on your team, which the Yahoo sync has already found on the roster.
     moves_logged: the caller already stored the exact add/drop times (Yahoo's transaction log)."""
-    _ensure()
     effective = effective or date.today().isoformat()
     ins, outs = [int(p) for p in ins], [int(p) for p in outs]
     me = ctx.my_key
@@ -157,7 +142,6 @@ def _roster(key):
 def delete(tid: int) -> dict:
     """Remove an entry from History, and its 'executed' mark on a suggestion. Yahoo's own move
     times stay: the move really happened, and week-to-date scoring needs it."""
-    _ensure()
     with db.cursor() as c:
         t = c.execute("SELECT * FROM transactions WHERE id=?", (tid,)).fetchone()
         if t is None:
@@ -175,7 +159,6 @@ def delete(tid: int) -> dict:
 def evaluate(ctx) -> int:
     """Score every transaction: production of players in vs out from the effective date on.
     Running total until the horizon passes, then final."""
-    _ensure()
     pw = model.point_weights() if model.scoring_mode() == "points" else None
     with db.cursor() as c:
         rows = [dict(r) for r in c.execute("SELECT * FROM transactions WHERE deleted=0")]
@@ -207,7 +190,6 @@ def evaluate(ctx) -> int:
 
 
 def report(ctx) -> dict:
-    _ensure()
     with db.cursor() as c:
         rows = [dict(r) for r in c.execute("SELECT * FROM transactions WHERE deleted=0 ORDER BY effective DESC, id DESC")]
         weeks = [dict(r) for r in c.execute("SELECT week, win_prob, result, opp_key FROM matchup_predictions "
@@ -236,7 +218,6 @@ def report(ctx) -> dict:
 
 def calibration_pairs() -> list:
     """(raw confidence, success) for finished 1-for-1 moves, for the confidence calibration."""
-    _ensure()
     out = []
     with db.cursor() as c:
         for r in c.execute("SELECT prediction, eval FROM transactions WHERE deleted=0 AND eval IS NOT NULL"):
@@ -246,10 +227,8 @@ def calibration_pairs() -> list:
     return out
 
 
-
 def adds_this_week(ctx) -> int:
     """Players brought in this fantasy week (adds, add/drops, trades, roster changes with ins)."""
-    _ensure()
     with db.cursor() as c:
         rows = c.execute("SELECT kind, players_in FROM transactions WHERE deleted=0 AND effective BETWEEN ? AND ?",
                          (ctx.week_start, ctx.week_end)).fetchall()

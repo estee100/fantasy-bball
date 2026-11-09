@@ -16,23 +16,10 @@ from datetime import date
 
 from . import config, db, model
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS overrides (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, since TEXT, nba_id INTEGER, kind TEXT,
-    value REAL, note TEXT, active INTEGER DEFAULT 1, cleared TEXT,
-    model_min REAL, model_per_game REAL, your_per_game REAL
-);
-"""
 SCALE_LIMITS = (0.3, 2.5)
 
 
-def _ensure():
-    with db.cursor() as c:
-        c.executescript(SCHEMA)
-
-
 def active() -> dict:
-    _ensure()
     with db.cursor() as c:
         return {r["nba_id"]: dict(r) for r in c.execute("SELECT * FROM overrides WHERE active=1 ORDER BY id")}
 
@@ -74,7 +61,6 @@ def set_take(ctx, pid: int, kind: str, value: float, note: str = "") -> dict:
         raise ValueError("Minutes must be between 0 and 48")
     if kind == "pct" and not (-70 <= value <= 150):
         raise ValueError("Percent change must be between -70 and +150")
-    _ensure()
     raw = ctx.raw_proj.loc[pid] if pid in ctx.raw_proj.index else None
     if raw is None:
         raise ValueError("No projection for this player yet")
@@ -91,7 +77,6 @@ def set_take(ctx, pid: int, kind: str, value: float, note: str = "") -> dict:
 
 
 def clear(pid: int):
-    _ensure()
     with db.cursor() as c:
         c.execute("UPDATE overrides SET active=0, cleared=? WHERE nba_id=? AND active=1", (date.today().isoformat(), pid))
 
@@ -99,7 +84,6 @@ def clear(pid: int):
 def report(ctx) -> dict:
     """Every take (active or cleared), judged on the player's games since it was set:
     whose per-game number was closer to what he actually averaged?"""
-    _ensure()
     pw = model.point_weights()
     with db.cursor() as c:
         rows = [dict(r) for r in c.execute("SELECT * FROM overrides ORDER BY created DESC")]

@@ -14,6 +14,8 @@ load_dotenv(ENV_PATH)
 YAHOO_KEY = os.getenv("YAHOO_CONSUMER_KEY", "")
 YAHOO_SECRET = os.getenv("YAHOO_CONSUMER_SECRET", "")
 YAHOO_LEAGUE_ID = os.getenv("YAHOO_LEAGUE_ID", "")
+# One or more leagues, comma-separated (the first is the default in the dashboard)
+YAHOO_LEAGUE_IDS = [x.strip() for x in YAHOO_LEAGUE_ID.split(",") if x.strip()]
 # Must match the Redirect URI registered on the Yahoo app exactly
 YAHOO_REDIRECT_URI = os.getenv("YAHOO_REDIRECT_URI", "https://localhost:8080")
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
@@ -35,7 +37,7 @@ CLAUDE_MODEL = "claude-opus-5-5"
 
 
 def yahoo_configured() -> bool:
-    return bool(YAHOO_KEY and YAHOO_SECRET and YAHOO_LEAGUE_ID)
+    return bool(YAHOO_KEY and YAHOO_SECRET and YAHOO_LEAGUE_IDS)
 
 
 def yahoo_authorized() -> bool:

@@ -9,14 +9,14 @@ from . import config, db, learning, model, news, nba, recommend, roles, sim  # n
 
 log = logging.getLogger(__name__)
 _lock = threading.Lock()
-_ctx = None
+_ctx: dict = {}   # league id -> sim.Context
 
 
 def context(reload=False) -> sim.Context:
-    global _ctx
-    if _ctx is None or reload:
-        _ctx = sim.load_context()
-    return _ctx
+    lid = db.current_league()
+    if lid not in _ctx or reload:
+        _ctx[lid] = sim.load_context()
+    return _ctx[lid]
 
 
 def _step(status, name, fn, *a):
@@ -39,80 +39,110 @@ def _short(x):
     return str(type(x).__name__)
 
 
-def refresh(daily=False) -> dict:
+SHARED_STEPS = {"player_directory", "schedule", "espn_positions", "game_logs", "injuries", "news",
+                "news_extraction", "scouting_folder", "backup"}
+
+
+def refresh(daily=False, leagues=None) -> dict:
+    """Shared data once (NBA, injuries, news), then each league. leagues: ids to run (default
+    all). Returns {league id: status}, with the shared steps under "shared"."""
     if not _lock.acquire(blocking=False):
         return {"skipped": "refresh already running"}
     try:
-        status = db.kv_get("pipeline_status", {})
-        if not config.yahoo_authorized():
-            status.pop("yahoo", None)  # sync isn't running: its old error is stale
-        if daily or db.kv_get("daily_done") != date.today().isoformat():
-            _step(status, "player_directory", nba.ingest_player_directory)
-            _step(status, "schedule", nba.ingest_schedule)
-            _step(status, "espn_positions", nba.ingest_espn_positions)
+        lids = list(leagues or db.league_ids())
+        today = date.today().isoformat()
+        shared = db.kv_get("shared_status", {})
+        shared_daily = daily or db.kv_get("shared_daily_done") != today
+        if shared_daily:
+            _step(shared, "player_directory", nba.ingest_player_directory)
+            _step(shared, "schedule", nba.ingest_schedule)
+            _step(shared, "espn_positions", nba.ingest_espn_positions)
             for season in (config.PRIOR_SEASON, config.PRIOR2_SEASON):  # 2 back: tuning only
                 if not _has_season(season):
-                    _step(status, f"logs_{season}", nba.ingest_logs, [season])
-        _step(status, "game_logs", nba.ingest_logs, [config.SEASON])
-        _step(status, "injuries", news.fetch_injuries)
-        _step(status, "news", news.fetch_news)
-        if config.yahoo_authorized():
-            from . import yahoo
-            _step(status, "yahoo", yahoo.sync)
-        elif not db.kv_get("league_source"):
-            from . import demo
-            _step(status, "demo_league", demo.build)
+                    _step(shared, f"logs_{season}", nba.ingest_logs, [season])
+        _step(shared, "game_logs", nba.ingest_logs, [config.SEASON])
+        _step(shared, "injuries", news.fetch_injuries)
+        _step(shared, "news", news.fetch_news)
 
-        ctx = context(reload=True)
-        fa = [int(p) for p in ctx.values.sort_values("var", ascending=False).index
-              if p not in ctx.rostered()][:60]
-        db.kv_set("top_free_agents", fa)
+        # every league syncs before news extraction, which reads all leagues' rosters
+        statuses = {}
+        for lid in lids:
+            with db.use_league(lid):
+                statuses[lid] = _sync_league()
         err = db.kv_get("claude_error")
         if err and news.claude_error_is_stale(err):
             db.kv_set("claude_error", None)  # may be fixed now: try again
-        _step(status, "news_extraction", news.extract_events)
-        ctx = context(reload=True)  # pick up new news events
+        _step(shared, "news_extraction", news.extract_events)
+        for lid in lids:
+            with db.use_league(lid):
+                _model_league(statuses[lid], daily)
 
-        _step(status, "roles", lambda: roles.store(roles.scan(ctx)) or "ok")
-        m = None
-        if ctx.rosters.get(ctx.opp_key):
-            m = _step(status, "matchup_sim", sim.simulate_matchup, ctx)
-        else:
-            db.kv_set("matchup", None)  # no opponent known yet
-        if m:
-            learning.record_matchup_prediction(ctx, m)
-            db.kv_set("matchup", {k: v for k, v in m.items() if k not in ("a", "b")})
-        r = _step(status, "recommendations", recommend.recommend, ctx)
-        if r:
-            db.kv_set("recommendations", r)
-        _step(status, "start_sit", lambda: db.kv_set("start_sit", recommend.start_sit_today(ctx)) or "ok")
-        from . import shadow
-        _step(status, "model_team", shadow.tick, ctx)
-        _step(status, "evaluate_moves", learning.evaluate_moves, ctx.logs)
-        _step(status, "resolve_matchups", learning.resolve_from_box_scores, ctx)
-        from . import alerts, history
-        _step(status, "history", history.evaluate, ctx)
-        _step(status, "alerts", alerts.run, ctx)
-        _step(status, "league_table", lambda: db.kv_set("league_table", league_table(ctx)) or "ok")
-
-        if daily or db.kv_get("daily_done") != date.today().isoformat():
-            _step(status, "tune_projections", learning.tune_projections)
-            _step(status, "news_multipliers", learning.learn_news_multipliers)
-            last_bt = db.kv_get("matchup_backtest") or {}
-            if not last_bt or (datetime.now(timezone.utc) - datetime.fromisoformat(last_bt["created"])).days >= 7:
-                from . import backtest  # weekly: re-check calibration of win probabilities
-                from . import matchups
-                _step(status, "opp_adjust_check", matchups.recheck_and_store)
-                _step(status, "matchup_backtest", lambda: backtest.store(backtest.calibrate()) or "ok")
-            _step(status, "scouting_folder", lambda: len(news.ingest_report_folder()))
-            _step(status, "backup", db.backup)
-            db.kv_set("daily_done", date.today().isoformat())
-            context(reload=True)
-        db.kv_set("pipeline_status", status)
-        db.kv_set("last_refresh", db.now_iso())
-        return status
+        if shared_daily:
+            _step(shared, "scouting_folder", lambda: len(news.ingest_report_folder()))
+            _step(shared, "backup", db.backup)
+            db.kv_set("shared_daily_done", today)
+        db.kv_set("shared_status", shared)
+        return {"shared": shared, **statuses}
     finally:
         _lock.release()
+
+
+def _sync_league() -> dict:
+    status = {k: v for k, v in db.kv_get("pipeline_status", {}).items() if k not in SHARED_STEPS}
+    if config.yahoo_authorized():
+        from . import yahoo
+        _step(status, "yahoo", yahoo.sync)
+    else:
+        status.pop("yahoo", None)  # sync isn't running: its old error is stale
+        if not db.kv_get("league_source"):
+            from . import demo
+            _step(status, "demo_league", demo.build)
+    ctx = context(reload=True)
+    fa = [int(p) for p in ctx.values.sort_values("var", ascending=False).index
+          if p not in ctx.rostered()][:60]
+    db.kv_set("top_free_agents", fa)
+    return status
+
+
+def _model_league(status, daily):
+    today = date.today().isoformat()
+    ctx = context(reload=True)  # pick up new news events
+    _step(status, "roles", lambda: roles.store(roles.scan(ctx)) or "ok")
+    m = None
+    if ctx.rosters.get(ctx.opp_key):
+        m = _step(status, "matchup_sim", sim.simulate_matchup, ctx)
+    else:
+        db.kv_set("matchup", None)  # no opponent known yet
+    if m:
+        learning.record_matchup_prediction(ctx, m)
+        db.kv_set("matchup", {k: v for k, v in m.items() if k not in ("a", "b")})
+    r = _step(status, "recommendations", recommend.recommend, ctx)
+    if r:
+        db.kv_set("recommendations", r)
+    _step(status, "start_sit", lambda: db.kv_set("start_sit", recommend.start_sit_today(ctx)) or "ok")
+    from . import shadow
+    _step(status, "model_team", shadow.tick, ctx)
+    _step(status, "evaluate_moves", learning.evaluate_moves, ctx.logs)
+    _step(status, "resolve_matchups", learning.resolve_from_box_scores, ctx)
+    from . import alerts, history
+    _step(status, "history", history.evaluate, ctx)
+    _step(status, "alerts", alerts.run, ctx)
+    _step(status, "league_table", lambda: db.kv_set("league_table", league_table(ctx)) or "ok")
+
+    if daily or db.kv_get("daily_done") != today:
+        # tuning optimises this league's own categories, so it runs per league
+        _step(status, "tune_projections", learning.tune_projections)
+        _step(status, "news_multipliers", learning.learn_news_multipliers)
+        last_bt = db.kv_get("matchup_backtest") or {}
+        if not last_bt or (datetime.now(timezone.utc) - datetime.fromisoformat(last_bt["created"])).days >= 7:
+            from . import backtest  # weekly: re-check calibration of win probabilities
+            from . import matchups
+            _step(status, "opp_adjust_check", matchups.recheck_and_store)
+            _step(status, "matchup_backtest", lambda: backtest.store(backtest.calibrate()) or "ok")
+        db.kv_set("daily_done", today)
+        context(reload=True)
+    db.kv_set("pipeline_status", status)
+    db.kv_set("last_refresh", db.now_iso())
 
 
 def _has_season(season) -> bool:

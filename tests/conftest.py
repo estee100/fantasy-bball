@@ -26,18 +26,21 @@ def league_db(tmp_path, monkeypatch):
     if not REAL_DB.exists():
         pytest.skip("no local database (run `python -m fbb init` first)")
     copy = tmp_path / "fbb.db"
-    src, dst = sqlite3.connect(REAL_DB), sqlite3.connect(copy)
-    src.backup(dst)
-    src.close()
-    dst.close()
+    (tmp_path / "leagues").mkdir()
+    pairs = [(REAL_DB, copy)] + [(p, tmp_path / "leagues" / p.name)
+                                 for p in (REAL_DB.parent / "leagues").glob("*.db")]
+    for a, b in pairs:   # SQLite's backup, not a file copy: picks up uncheckpointed WAL pages
+        src, dst = sqlite3.connect(a), sqlite3.connect(b)
+        src.backup(dst)
+        src.close()
+        dst.close()
     monkeypatch.setattr(config, "DB_PATH", copy)
-    monkeypatch.setattr(db, "_conn", None)       # force a new connection to the copy
+    db.close_all()
+    monkeypatch.setattr(db, "_conns", {})        # force new connections to the copy
     from fbb import pipeline
-    monkeypatch.setattr(pipeline, "_ctx", None)
+    monkeypatch.setattr(pipeline, "_ctx", {})
     yield copy
-    if db._conn is not None:
-        db._conn.close()
-    db._conn = None
+    db.close_all()
 
 
 @pytest.fixture

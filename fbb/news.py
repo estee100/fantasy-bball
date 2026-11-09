@@ -243,10 +243,14 @@ def claude_error_is_stale(err: dict) -> bool:
 
 
 def relevant_player_ids() -> set:
-    with db.cursor() as c:
-        ids = {r[0] for r in c.execute("SELECT nba_id FROM rosters")}
-    vals = db.kv_get("top_free_agents", [])
-    return ids | set(vals)
+    """Rostered or top free agent in any league: news is shared, so is what's worth reading."""
+    ids = set()
+    for lid in db.league_ids():
+        with db.use_league(lid):
+            with db.cursor() as c:
+                ids |= {r[0] for r in c.execute("SELECT nba_id FROM rosters")}
+            ids |= set(db.kv_get("top_free_agents", []))
+    return ids
 
 
 def extract_events(batch_size=15, max_batches=4) -> int:

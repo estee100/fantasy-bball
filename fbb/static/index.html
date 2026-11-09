@@ -17,6 +17,7 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="var(--opp)"/><path d="M2 12h20M12 2v20M5 5c4 4 4 10 0 14M19 5c-4 4-4 10 0 14" stroke="var(--ink)" stroke-width="1.2" fill="none"/></svg>
       Fantasy Hoops HQ
     </div>
+    <select class="btn league-pick hidden" id="league-pick" aria-label="League"></select>
     <div class="league-meta" id="league-meta"></div>
     <div class="top-actions">
       <button class="btn ghost" id="ready-btn" aria-expanded="false" title="Data readiness"></button>
@@ -31,6 +32,7 @@
   </div>
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
+    <button role="tab" data-tab="draft">Draft</button>
     <button role="tab" data-tab="roster">Rosters</button>
     <button role="tab" data-tab="check">Pickups</button>
     <button role="tab" data-tab="trade">Trades</button>
@@ -84,6 +86,45 @@
   </section>
 
   <!-- ======================================================= ROSTERS -->
+  <section data-panel="draft" class="hidden">
+    <div class="grid cols-2">
+      <div class="card">
+        <div class="hd"><h2>On the clock</h2><span class="sub" id="draft-status"></span>
+          <span class="right draft-actions">
+            <label class="small"><input type="checkbox" id="draft-live"> Follow Yahoo live</label>
+            <button class="btn ghost small" id="draft-undo" title="Take back your last pick (and the simulated picks after it)">Undo</button>
+            <button class="btn ghost small" id="draft-reset" title="Start the mock draft over">Reset</button>
+          </span></div>
+        <div class="bd" id="draft-clock"></div>
+      </div>
+      <div class="card">
+        <div class="hd"><h2>Your team</h2><span class="sub" id="draft-slots"></span></div>
+        <div class="bd" id="draft-team"></div>
+      </div>
+    </div>
+    <div class="grid cols-2 section-gap">
+      <div class="card">
+        <div class="hd"><h2>Big board</h2><span class="sub" id="draft-board-sub"></span>
+          <span class="right draft-filters">
+            <input type="search" id="draft-q" placeholder="Search players" aria-label="Search players">
+            <select class="btn" id="draft-pos" aria-label="Position"><option value="">All positions</option>
+              <option>PG</option><option>SG</option><option>SF</option><option>PF</option><option>C</option></select>
+          </span></div>
+        <div class="bd draft-board-wrap"><table id="draft-board"></table></div>
+      </div>
+      <div class="grid" style="align-content:start">
+        <div class="card">
+          <div class="hd"><h2>Draft settings</h2><span class="sub">blank = from Yahoo or the league</span></div>
+          <div class="bd" id="draft-settings"></div>
+        </div>
+        <div class="card">
+          <div class="hd"><h2>Picks</h2><span class="sub" id="draft-picks-sub"></span></div>
+          <div class="bd draft-log" id="draft-picks"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section data-panel="roster" class="hidden">
     <div class="card">
       <div class="hd"><h2 id="my-roster-title">My roster</h2><span class="sub">per-game projections · value is above replacement level</span></div>

@@ -27,7 +27,7 @@ def query():
     if not config.yahoo_configured():
         raise RuntimeError("Set YAHOO_CONSUMER_KEY, YAHOO_CONSUMER_SECRET and YAHOO_LEAGUE_ID in .env")
     return YahooFantasySportsQuery(
-        config.YAHOO_LEAGUE_ID, game_code="nba",
+        db.current_league(), game_code="nba",
         yahoo_consumer_key=config.YAHOO_KEY, yahoo_consumer_secret=config.YAHOO_SECRET,
         env_file_location=config.ROOT, save_token_data_to_env_file=True,
     )
@@ -174,7 +174,13 @@ def sync_rosters(q) -> dict:
         with db.cursor() as c:
             c.execute("INSERT OR REPLACE INTO fantasy_teams VALUES (?,?,?,?,?,?,?,?)",
                       (key, _s(_get(t, "name")), mgr, 1 if mine else 0, w, l, ti, rk))
-        players = q.get_team_roster_player_info_by_date(_get(t, "team_id"), today) or []
+        try:
+            players = q.get_team_roster_player_info_by_date(_get(t, "team_id"), today) or []
+        except Exception as e:
+            # before the draft Yahoo answers an empty roster with "no data found", not []
+            if "No data found" not in str(e):
+                raise
+            players = []
         rosters[key] = []
         for p in players:
             p = _unwrap(p)
@@ -386,7 +392,6 @@ def _log_my_transaction(ctx, my_key, t, ins, outs, other):
     import json
     from datetime import timedelta
     from . import history
-    history._ensure()
     kind = "trade" if t["type"] == "trade" else "add/drop" if ins and outs else "add" if ins else "drop"
     when = t["when"].astimezone()
     eff = when.date()
@@ -548,5 +553,11 @@ def sync() -> dict:
         sync_waivers(q, db.kv_get("league_key"))
     except Exception as e:  # without it, waiver status is just unknown
         log.warning("waiver list unavailable: %s", e)
+    if (db.kv_get("draft_yahoo") or {}).get("status") != "postdraft":
+        from . import draft
+        try:   # draft order, picks and Yahoo's rankings, until the draft is over
+            draft.sync_yahoo(q, force=True)
+        except Exception as e:
+            log.warning("draft info unavailable: %s", e)
     db.kv_set("yahoo_synced", db.now_iso())
     return dict(info, my_key=r["my_key"], unmatched=db.kv_get("unmatched_players", []))
