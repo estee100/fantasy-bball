@@ -25,6 +25,18 @@ SEASON_ENDING = re.compile(r"out for the (?:rest of the |remainder of the )?seas
 
 INJURY_AVAIL = {"out": 0.05, "doubtful": 0.25, "questionable": 0.55, "day-to-day": 0.65,
                 "probable": 0.9, "suspension": 0.0}
+# Listings that are about the next game, not a stretch of them
+SHORT_LISTED = {"day-to-day", "game-time decision", "questionable", "doubtful", "probable"}
+SHORT_RECOVERED = 0.85   # the games after the one named: same as a served timeline
+NOTE_WORDS = {"doubtful": 0.25, "questionable": 0.55, "game-time decision": 0.55, "probable": 0.9}
+
+
+def note_level(comment: str):
+    """Chance to play the game a short-term note names, from its own wording. The word
+    mentioned last wins: "upgraded from questionable to probable" is probable."""
+    c = comment.lower()
+    hits = [(c.rfind(w), v) for w, v in NOTE_WORDS.items() if w in c]
+    return max(hits)[1] if hits else None
 
 
 def league_pcts(logs: pd.DataFrame) -> dict:
@@ -387,9 +399,22 @@ def availability(pid, game_dates, injuries, events, b2b, team_dates_set):
     streak = _streak(pid, injuries)
     if streak:
         games_out = max(games_out or 0.0, streak)
+    # A short-term listing is about one game, not the whole week (Nov 2026: Jokic, "probable
+    # for Monday", was counted at the Day-To-Day 65% for all three games, so his opponent's
+    # win chance read 87% instead of ~74%). The named game gets the note's own word; the
+    # games after it the same recovery as a served timeline.
+    named = None
+    if inj and status in SHORT_LISTED and not (games_out and round(games_out) > 0) and game_dates:
+        games_out = None   # "day-to-day" in the note reads as half a game: the named game is it
+        base = note_level(inj["comment"] or "") or base
+        day = us_day(inj.get("date"))
+        named = next((d for d in sorted(team_dates_set) if d >= day), None) if day else None
+        named = named or game_dates[0]
     out = []
     for i, d in enumerate(game_dates):
         p = base
+        if named is not None and d != named:
+            p = max(base, SHORT_RECOVERED)
         if games_out is not None and games_out > 0:
             p = 0.0 if i < round(games_out) else max(base, 0.85)
         prev = (date.fromisoformat(d) - timedelta(days=1)).isoformat()

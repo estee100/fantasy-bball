@@ -119,6 +119,29 @@ def test_one_game_timelines_count_down_from_the_us_day_written():
     assert model.availability(2, [wed], {}, ev, {}, team)[0] > 0.8
 
 
+def test_day_to_day_note_is_about_the_next_game_not_the_week():
+    """Nov 2026: Jokic, 'probable for Monday', counted at 65% for all three games."""
+    from datetime import date, timedelta
+    today = date.today()
+    g = [(today + timedelta(days=k)).isoformat() for k in (0, 2, 5)]
+    team = set(g)
+    note = lambda c: {1: {"status": "Day-To-Day", "comment": c, "date": today.isoformat()}}
+    prob = model.availability(1, g, note("Jokic (elbow) is probable for Monday's game."), {}, {}, team)
+    assert prob == [0.9, 0.9, 0.9]   # never below the recovery level
+    q = model.availability(1, g, note("Reaves is questionable for Monday due to an illness."), {}, {}, team)
+    assert q[0] == 0.55 and q[1] == 0.85
+    assert model.note_level("upgraded from questionable to probable") == 0.9
+    # no qualifier: Day-To-Day's own level for the next game only
+    plain = model.availability(1, g, note("Smith (ankle) is day-to-day."), {}, {}, team)
+    assert plain[0] == 0.65 and plain[2] == 0.85
+    # the named game already played (note from last week): he's past it
+    old = {1: {"status": "Day-To-Day", "comment": "questionable", "date": (today - timedelta(days=3)).isoformat()}}
+    assert model.availability(1, g, old, {}, {}, team | {(today - timedelta(days=2)).isoformat()}) == [0.85] * 3
+    # a real timeline still wins
+    out = model.availability(1, g, note("Smith is out for Monday's game and day-to-day after."), {}, {}, team)
+    assert out[0] == 0.0
+
+
 def test_reddit_and_unknown_publishers_dont_move_the_model():
     from fbb import news
     assert not news.is_credible("Reddit", "Paul Reed versus Aday Mara")
