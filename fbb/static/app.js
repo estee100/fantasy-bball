@@ -1346,7 +1346,20 @@ function initDraft() {
   $("#draft-pos").addEventListener("change", renderDraftBoard);
   $("#draft-undo").addEventListener("click", () => draftAct(() => api("/api/draft/pick", { method: "DELETE" })));
   $("#draft-reset").addEventListener("click", () => {
-    if (confirm("Start over? Clears every pick recorded here (Yahoo's picks stay).")) draftAct(() => api("/api/draft/reset", { method: "POST" }));
+    // Live mode shows Yahoo's real picks, which Reset can't clear: it used to "work" (clearing
+    // only picks entered here) while the board stayed full. Offer a fresh mock draft instead.
+    if (D && D.settings.mode === "live") {
+      if (!confirm("Live mode shows your league's real draft from Yahoo, which can't be cleared.\n\nStart a fresh mock draft instead? (Switch Mode back to Live any time.)")) return;
+      draftAct(async () => {
+        await api("/api/draft/reset", { method: "POST" });
+        // keep your real pick slot (Yahoo's order only applies in Live), so the teams before you pick
+        const changes = { mode: "mock" };
+        if (D.settings.my_slot && D.settings.sources.my_slot !== "you") changes.my_slot = D.settings.my_slot;
+        await api("/api/draft/settings", { method: "POST", body: JSON.stringify({ changes }) });
+      });
+      return;
+    }
+    if (confirm("Start the mock draft over? Clears every pick, then the teams before you pick again.")) draftAct(() => api("/api/draft/reset", { method: "POST" }));
   });
   $("#draft-live").addEventListener("change", (e) => {
     clearInterval(draftTimer);
