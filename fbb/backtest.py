@@ -127,6 +127,8 @@ def run(season=None, weeks_skip=2, max_weeks=None, num_teams=12, roster_size=13,
     rates = model.miss_rates(logs_all, season)
     saved_rates = (model.HEALTHY_GAME, model.HEALTHY_ROS)
     saved_streak, model.ABSENCE_STREAK = model.ABSENCE_STREAK, {}
+    # durability is built from the seasons before today's, which include the one replayed here
+    saved_dur, model.DURABILITY = model.DURABILITY, {}
     model.HEALTHY_GAME, model.HEALTHY_ROS = 1 - rates["all"], 1 - rates["all"]
     saved_scales = db.kv_get("value_scales")  # value_players() writes these; restore after
     rows = []
@@ -153,6 +155,7 @@ def run(season=None, weeks_skip=2, max_weeks=None, num_teams=12, roster_size=13,
         db.kv_set("value_scales", saved_scales)
         model.HEALTHY_GAME, model.HEALTHY_ROS = saved_rates
         model.ABSENCE_STREAK = saved_streak
+        model.DURABILITY = saved_dur
     out = summarize(rows)
     out["rows"] = rows
     out["miss_rates"] = rates

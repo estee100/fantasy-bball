@@ -424,8 +424,77 @@ def availability(pid, game_dates, injuries, events, b2b, team_dates_set):
     return out
 
 
+# Durability: how many games a player has played in past seasons, next to a typical rotation
+# player. Without it every player healthy today projects the same rest-of-season games, and
+# the draft board ranked Anthony Davis 5th after he played 20 games in 2025-26 (Nov 2026).
+# Measured on 271 rotation players: one season's share of games predicts the next season's
+# with slope 0.33 (corr 0.30), so history counts but is shrunk hard: the prior is worth
+# 160 games, about two seasons, which gives one season ~1/3 weight (82 / (82+160)).
+# Only completed seasons count: this season's absences already show up as injury listings.
+DURABILITY: dict = {}          # {pid: multiplier on HEALTHY_ROS}; set when a context loads
+DURABILITY_PRIOR = 160.0
+DURABILITY_WEIGHTS = (1.0, 0.75)   # last season, the one before
+DURABILITY_MIN_MINUTES = 20.0      # seasons in a smaller role say more about the coach than the body
+DURABILITY_RANGE = (0.4, 1.2)
+ROS_CAP = 0.97                     # nobody is expected to play every game
+SEASON_GAMES = 82.0
+
+
+def durability(logs: pd.DataFrame) -> dict:
+    """{pid: games-played multiplier} from the last two completed seasons of box scores.
+    1.0 = a typical rotation player; players without a rotation season in the data aren't
+    listed (rookies, new roles) and count as 1.0."""
+    if logs.empty:
+        return {}
+    played_logs = logs[logs["min"] > 0]
+    seasons = sorted(played_logs["season"].unique())
+    past = [s for s in seasons if s < seasons[-1]][-len(DURABILITY_WEIGHTS):][::-1]
+    P, N = {}, {}
+    for w, season in zip(DURABILITY_WEIGHTS, past):
+        s = played_logs[played_logs["season"] == season]
+        d = s["game_date"].astype(str).str[:10]
+        dates = sorted(set(d))
+        pos = {x: i for i, x in enumerate(dates)}
+        earlier = set(played_logs.loc[played_logs["season"] < season, "nba_id"])
+        first_in_data = season == seasons[0]
+        g = s.assign(d=d).groupby("nba_id").agg(n=("d", "nunique"), m=("min", "mean"), first=("d", "min"))
+        for pid, r in g.iterrows():
+            if r["m"] < DURABILITY_MIN_MINUTES:
+                continue
+            possible = SEASON_GAMES
+            if not first_in_data and pid not in earlier:   # newcomer: count from his debut
+                possible *= 1 - pos[r["first"]] / len(dates)
+            P[pid] = P.get(pid, 0.0) + w * min(r["n"], possible)
+            N[pid] = N.get(pid, 0.0) + w * possible
+        # a rotation player the season before who never played this one missed all of it
+        # (Haliburton's 2025-26 Achilles leaves no box scores to count otherwise); retired
+        # players land here too, but they aren't on any board
+        i = seasons.index(season)
+        if i > 0:
+            prev = played_logs[played_logs["season"] == seasons[i - 1]].groupby("nba_id")["min"].mean()
+            for pid in prev[prev >= DURABILITY_MIN_MINUTES].index.difference(g.index):
+                N[pid] = N.get(pid, 0.0) + w * SEASON_GAMES
+                P.setdefault(pid, 0.0)
+    if not N:
+        return {}
+    # the typical player is one still playing: retirees' empty seasons would drag the mean
+    # down and make everyone active look sturdier than he is
+    active = set(played_logs.loc[played_logs["season"] == seasons[-1], "nba_id"]) & set(N)
+    ref = active or set(N)
+    mean = sum(P[p] for p in ref) / sum(N[p] for p in ref)
+    lo, hi = DURABILITY_RANGE
+    return {int(p): float(np.clip((P[p] + DURABILITY_PRIOR * mean) / (N[p] + DURABILITY_PRIOR) / mean, lo, hi))
+            for p in N}
+
+
+def healthy_ros(pid) -> float:
+    """Share of the rest of the season a player who isn't listed injured plays."""
+    return min(HEALTHY_ROS * DURABILITY.get(pid, 1.0), ROS_CAP)
+
+
 def ros_availability(pid, injuries, events) -> float:
     """Expected share of the rest of the season's games the player suits up for."""
+    healthy = healthy_ros(pid)
     inj = injuries.get(pid)
     games_out = _games_out(pid, injuries, events)
     streak = _streak(pid, injuries)
@@ -433,11 +502,11 @@ def ros_availability(pid, injuries, events) -> float:
         games_out = max(games_out or 0.0, streak)
     left = max(season_games_left(), 1.0)
     if games_out is not None:
-        return max(0.0, 1 - games_out / left) * HEALTHY_ROS
+        return max(0.0, 1 - games_out / left) * healthy
     if not inj:
-        return HEALTHY_ROS
+        return healthy
     status = (inj["status"] or "").lower()
-    return HEALTHY_ROS * {"out": 0.85, "doubtful": 0.92, "questionable": 0.97}.get(status, 0.98)
+    return healthy * {"out": 0.85, "doubtful": 0.92, "questionable": 0.97}.get(status, 0.98)
 
 
 # Share of a news item's promised minutes boost that shows up. Measured Nov 2026 on 16 players

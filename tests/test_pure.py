@@ -257,3 +257,32 @@ def test_claude_credit_error_retries_with_unchanged_key(monkeypatch):
     assert news.claude_error_is_stale({**same, "message": credit})  # a top-up isn't visible locally
     assert not news.claude_error_is_stale({**same, "message": "invalid x-api-key"})  # waits for a key change
     assert news.claude_error_is_stale({"key_tail": "old000", "workspace": "", "message": "invalid x-api-key"})
+
+
+def test_durability_marks_players_who_miss_games_and_shrinks_hard(monkeypatch):
+    import pandas as pd
+    rows = []
+
+    def season(s, pid, n, mins=30.0, start=0):
+        for i in range(start, start + n):
+            rows.append({"nba_id": pid, "season": s, "min": mins,
+                         "game_date": pd.Timestamp(f"{s[:4]}-10-20") + pd.Timedelta(days=i)})
+
+    for s in ("2024-25", "2025-26"):
+        season(s, 1, 80)              # iron man
+        season(s, 2, 20)              # fragile
+        season(s, 4, 82, mins=10.0)   # bench: his games say nothing about his health
+        for pid in range(10, 30):     # the typical rotation player
+            season(s, pid, 65)
+    season("2024-25", 3, 70)          # missed all of 2025-26: counts as 0 of 82, not as no data
+    season("2026-27", 1, 5)
+    d = model.durability(pd.DataFrame(rows))
+    assert d[1] > 1.0 > d[2]
+    assert d[3] < 0.9
+    assert 4 not in d and 99 not in d
+    assert d[2] > 0.5          # 20 of 82 twice: shrunk well short of its raw 0.3x
+    monkeypatch.setattr(model, "HEALTHY_ROS", 0.9)
+    monkeypatch.setattr(model, "DURABILITY", {1: 1.2, 2: d[2]})
+    assert model.healthy_ros(1) == model.ROS_CAP
+    assert model.healthy_ros(2) < model.HEALTHY_ROS == model.healthy_ros(99)
+    assert model.ros_availability(2, {}, {}) == model.healthy_ros(2)
