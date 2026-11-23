@@ -19,7 +19,7 @@ def main():
     sub.add_parser("demo", help="(re)build the demo league")
     sub.add_parser("leagues", help="list configured leagues")
     au = sub.add_parser("autostart", help="start the dashboard hidden at Windows login")
-    au.add_argument("action", choices=["install", "remove"])
+    au.add_argument("action", choices=["install", "remove", "restart"])
     s = sub.add_parser("serve", help="run the dashboard + scheduler")
     s.add_argument("--port", type=int, default=8000)
     a = ap.parse_args()
@@ -76,7 +76,8 @@ def main():
             print(f"{lid}\t{db.league_name(lid)}")
     elif a.cmd == "autostart":
         from . import autostart
-        {"install": autostart.install, "remove": autostart.remove}[a.action]()
+        {"install": autostart.install, "remove": autostart.remove,
+         "restart": autostart.restart}[a.action]()
     elif a.cmd == "serve":
         import uvicorn
         uvicorn.run("fbb.server:app", host="127.0.0.1", port=a.port)

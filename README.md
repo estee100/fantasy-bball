@@ -14,6 +14,7 @@ window; logs in `data/server.log`):
 
 ```
 python -m fbb autostart install    # undo with: python -m fbb autostart remove
+python -m fbb autostart restart    # restart it, e.g. after editing .env
 ```
 
 Without Yahoo credentials it runs on a demo league (10 teams snake-drafted from real projections)
