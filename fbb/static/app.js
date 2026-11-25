@@ -1319,6 +1319,7 @@ async function loadModelTeam() {
   const el = $("#mt-body");
   if (!M.started) { el.innerHTML = '<span class="muted small">Not started.</span>'; return; }
   const r = M.record;
+  const wlt = (x) => x.slice(0, 2).join("–") + (x[2] ? `–${x[2]}` : "");  // ties only when there are any
   $("#mt-sub").textContent = `started ${shortDate(M.started)} from your roster · manages itself: adds/drops, IL, lineups (no trades) · max 4 adds/week`;
   const weeks = M.weeks.map((w) => `<tr><td>${esc(shortDate(w.week_start))}${w.final ? "" : ' <span class="muted small">(in progress)</span>'}</td>
     <td>${esc(w.opp_name || "?")}</td><td class="r num">${fmt(w.model, 0)}</td><td class="r num">${fmt(w.you, 0)}</td><td class="r num">${w.opp == null ? "?" : fmt(w.opp, 0)}</td>
@@ -1329,8 +1330,8 @@ async function loadModelTeam() {
     <td class="small">${m.add_name ? (m.you_too ? "you did too" : '<span class="delta-down">you didn\'t</span>') : ""}</td></tr>`).join("");
   el.innerHTML = `
     <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:10px">
-      <div><div class="small muted">Model team record</div><div class="num" style="font-size:1.4em">${r.model[0]}–${r.model[1]}</div></div>
-      <div><div class="small muted">Your record (same opponents)</div><div class="num" style="font-size:1.4em">${r.you[0]}–${r.you[1]}</div></div>
+      <div><div class="small muted">Model team record</div><div class="num" style="font-size:1.4em">${wlt(r.model)}</div></div>
+      <div><div class="small muted">Your record, same weeks (since ${esc(shortDate(M.started))})</div><div class="num" style="font-size:1.4em">${wlt(r.you)}</div></div>
       <div style="flex:1;min-width:220px"><div class="small muted">Its roster now</div><div class="small">${esc(M.roster.join(", "))}${M.il.length ? ` · IL: ${esc(M.il.join(", "))}` : ""}${M.pending.length ? ` · claims: ${esc(M.pending.map((c) => c.add).join(", "))}` : ""}</div></div>
     </div>
     ${weeks ? `<div class="tbl-wrap"><table><thead><tr><th>Week of</th><th>Opponent</th><th class="r">Model</th><th class="r">You</th><th class="r">Opponent</th><th class="r">Model − you</th></tr></thead><tbody>${weeks}</tbody></table></div>` : '<div class="small muted">No finished days yet: the first scores appear the morning after its first games.</div>'}

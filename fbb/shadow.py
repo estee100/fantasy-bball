@@ -277,17 +277,34 @@ def report(ctx) -> dict:
         moves = [dict(r) for r in c.execute("SELECT * FROM shadow_moves ORDER BY id")]
         hist = [dict(r) for r in c.execute("SELECT effective, players_in FROM transactions WHERE deleted=0")]
     my_ins = {p for h in hist for p in json.loads(h["players_in"])}
+    # Group by the league's real matchup periods, not Monday-Sunday: Yahoo has short opening
+    # weeks and two-week matchups (e.g. around the All-Star break), which calendar weeks would
+    # split into two "results".
+    sched = [w for w in (db.kv_get("schedule") or []) if w.get("start") and w.get("end")]
+
+    def period(day):
+        for m in sched:
+            if m["start"] <= day <= m["end"]:
+                return m["start"], m["end"], m
+        ws, we = _week_bounds(day)
+        return ws, we, None
+
     weeks = {}
     for d in days:
-        ws, _ = _week_bounds(d["day"])
-        w = weeks.setdefault(ws, {"week_start": ws, "model": 0.0, "days": 0, "opp_key": d["opp_key"]})
+        ws, we, m = period(d["day"])
+        w = weeks.setdefault(ws, {"week_start": ws, "week_end": we, "model": 0.0, "days": 0,
+                                  "opp_key": d["opp_key"], "_m": m})
         w["model"] += d["points"] or 0.0
         w["days"] += 1
         w["opp_key"] = d["opp_key"] or w["opp_key"]
     today = date.today().isoformat()
-    rec = {"model": [0, 0], "you": [0, 0]}
+    rec = {"model": [0, 0, 0], "you": [0, 0, 0]}  # wins, losses, ties
+
+    def tally(r, mine, theirs):
+        r[0 if mine > theirs else 1 if mine < theirs else 2] += 1
+
     for ws, w in weeks.items():
-        we = (date.fromisoformat(ws) + timedelta(days=6)).isoformat()
+        we, m = w["week_end"], w.pop("_m")
         wc = copy.copy(ctx)
         wc._pools = {}
         wc.week_start, wc.today = ws, min(today, (date.fromisoformat(we) + timedelta(days=1)).isoformat())
@@ -296,9 +313,16 @@ def report(ctx) -> dict:
         w["opp"] = _fp_dict(sim.estimate_wtd(wc, ctx.rosters.get(w["opp_key"], []), w["opp_key"])) if w["opp_key"] else None
         w["opp_name"] = (ctx.teams.get(w["opp_key"]) or {}).get("name") if w["opp_key"] else None
         w["final"] = we < today
+        # once Yahoo has scored the week, its numbers replace the box-score estimates: a close
+        # week (one was 1116 vs 1112) can otherwise come out the wrong way
+        if m and m.get("my_points") is not None and m.get("opp_points") is not None:
+            w["you"], w["opp"] = float(m["my_points"]), float(m["opp_points"])
         if w["final"] and w["opp"] is not None:
-            rec["model"][0 if w["model"] > w["opp"] else 1] += 1
-            rec["you"][0 if w["you"] > w["opp"] else 1] += 1
+            tally(rec["model"], w["model"], w["opp"])
+            if m and m.get("result") is not None:
+                rec["you"][{1.0: 0, 0.0: 1}.get(float(m["result"]), 2)] += 1
+            else:
+                tally(rec["you"], w["you"], w["opp"])
     since = s["started"]
     out_moves = []
     for m in moves:
